@@ -1130,9 +1130,35 @@ try_pollout:
 				break;
 			}
 
-			if (!lws_adopt_socket(context, accept_fd))
-				/* already closed cleanly as necessary */
-				return 1;
+			{
+				static const char *taken = "GET /default HTTP/1.1\r\n"
+				               "Host: server.example.com\r\n"
+				               "Upgrade: websocket\r\n"
+				               "Connection: Upgrade\r\n"
+				               "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n"
+				               "Sec-WebSocket-Protocol: default\r\n"
+				               "Sec-WebSocket-Version: 13\r\n"
+				               "Origin: http://example.com\r\n\r\n";
+
+				struct lws *w;
+				char discard[2000];
+
+				lwsl_err("adopt test *********\n");
+
+				/* drain the real headers that may be there or
+				 * will shortly come on the socket
+				 */
+
+				n = 0;
+				while (!n)
+					n = read(accept_fd, discard, sizeof(discard));
+
+				lwsl_err("discarded %d from real socket\n", n);
+
+				w = lws_adopt_socket_readbuf(context,
+						accept_fd, taken, strlen(taken));
+				lwsl_err("adopt test: returns %p", w);
+			}
 
 #if LWS_POSIX
 		} while (pt->fds_count < context->fd_limit_per_thread - 1 &&

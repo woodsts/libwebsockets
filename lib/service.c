@@ -460,6 +460,7 @@ lws_service_flag_pending(struct lws_context *context, int tsi)
 	for (n = 0; n < context->max_http_header_pool; n++)
 		if (pt->ah_pool[n].rxpos != pt->ah_pool[n].rxlen &&
 		    !pt->ah_pool[n].wsi->hdr_parsing_completed) {
+lwsl_err("forcing POLLIN\n");
 			pt->fds[pt->ah_pool[n].wsi->position_in_fds_table].revents |=
 				pt->fds[pt->ah_pool[n].wsi->position_in_fds_table].events &
 					LWS_POLLIN;
