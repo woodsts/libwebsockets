@@ -856,7 +856,9 @@ lws_adopt_socket_readbuf(struct lws_context *context, lws_sockfd_type accept_fd,
 			 const char *readbuf, size_t len)
 {
 	struct lws *wsi = lws_adopt_socket(context, accept_fd);
+	struct lws_context_per_thread *pt;
 	struct allocated_headers *ah;
+	struct lws_pollfd *pfd;
 
 	if (!wsi)
 		return NULL;
@@ -879,6 +881,16 @@ lws_adopt_socket_readbuf(struct lws_context *context, lws_sockfd_type accept_fd,
 		memcpy(ah->rx, readbuf, len);
 		ah->rxpos = 0;
 		ah->rxlen = len;
+
+		pt = &context->pt[(int)wsi->tsi];
+
+		/* unlike a normal connect, we have the headers already
+		 * (or the first part of them anyway)
+		 */
+		pfd = &pt->fds[wsi->position_in_fds_table];
+		pfd->revents |= LWS_POLLIN;
+		lwsl_err("%s: calling service\n", __func__);
+		lws_service_fd_tsi(context, pfd, wsi->tsi);
 
 		return wsi;
 	}
@@ -1046,6 +1058,9 @@ try_pollout:
 			lwsl_notice("%s a\n", __func__);
 			goto fail;
 		}
+
+		if (!wsi->hdr_parsing_completed)
+			break;
 
 		if (wsi->state != LWSS_HTTP_ISSUING_FILE) {
 			n = user_callback_handle_rxflow(wsi->protocol->callback,

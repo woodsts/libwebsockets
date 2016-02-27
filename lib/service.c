@@ -237,6 +237,9 @@ user_service:
 			return 1;
 		}
 
+	if (!wsi->hdr_parsing_completed)
+		return 0;
+
 #ifdef LWS_USE_HTTP2
 	/*
 	 * we are the 'network wsi' for potentially many muxed child wsi with
