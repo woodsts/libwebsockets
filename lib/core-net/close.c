@@ -654,15 +654,6 @@ just_kill_connection:
 	if (wsi->http.buflist_post_body)
 		lws_buflist_destroy_all_segments(&wsi->http.buflist_post_body);
 #endif
-#if defined(LWS_WITH_UDP)
-	if (wsi->udp) {
-		/* confirm no sul left scheduled in wsi->udp itself */
-		lws_sul_debug_zombies(wsi->a.context, wsi->udp,
-					sizeof(*wsi->udp), "close udp wsi");
-
-		lws_free_set_NULL(wsi->udp);
-	}
-#endif
 
 	if (lws_rops_fidx(wsi->role_ops, LWS_ROPS_close_kill_connection))
 		lws_rops_func_fidx(wsi->role_ops,

@@ -26,7 +26,9 @@
 
 #include "private-lib-core.h"
 #include "private-lib-async-dns.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 
 #if defined(LWS_WITH_SYS_ASYNC_DNS)
 

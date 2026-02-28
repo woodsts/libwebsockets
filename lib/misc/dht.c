@@ -26,7 +26,9 @@
 
 #include "../core/private-lib-core.h"
 #include "../core-net/private-lib-core-net.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <errno.h>
 
 // #define DHT_VERBOSE
