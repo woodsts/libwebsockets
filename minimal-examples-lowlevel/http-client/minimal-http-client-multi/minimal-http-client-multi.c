@@ -646,11 +646,15 @@ int main(int argc, const char **argv)
 #endif
 
 	lws_context_info_defaults(&info, NULL);memset(&i, 0, sizeof i); /* otherwise uninitialized garbage */
+        
+        for (int dbg = 0; dbg < argc; dbg++) {
+                lwsl_notice("AGY-DEBUG: argv[%d] = '%s'\n", dbg, argv[dbg]);
+        }
 
-	lws_cmdline_option_handle_builtin(argc, argv, &info);
+        lws_cmdline_option_handle_builtin(argc, argv, &info);
 
 	info.signal_cb = signal_cb;
-	info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+	info.options |= LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
 
 	if (lws_cmdline_option(argc, argv, switches[LWS_SW_UV].sw))
 		info.options |= LWS_SERVER_OPTION_LIBUV;
@@ -721,6 +725,11 @@ int main(int argc, const char **argv)
 		 */
 		info.simultaneous_ssl_handshake_restriction = atoi(p);
 
+        if ((p = lws_cmdline_option(argc, argv, "--tls13-ciphers"))) {
+                info.client_tls_1_3_plus_cipher_list = p;
+                info.client_ssl_cipher_list = p;
+        }
+
 	context = lws_create_context(&info);
 	if (!context) {
 		lwsl_err("lws init failed\n");
@@ -770,10 +779,12 @@ int main(int argc, const char **argv)
 
 	/* force h1 even if h2 available */
 	if (lws_cmdline_option(argc, argv, "--h3"))
-		info.alpn = "h3";
+		i.alpn = "h3";
 
 	if (lws_cmdline_option(argc, argv, "--quicv2"))
 		info.options |= LWS_SERVER_OPTION_QUIC_LATEST_VERSION;
+
+
 
 	if (lws_cmdline_option(argc, argv, "--h1"))
 		i.alpn = "http/1.1";
