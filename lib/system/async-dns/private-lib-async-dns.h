@@ -112,6 +112,14 @@ typedef struct lws_adns_cache {
 	uint8_t			flags;	/* b0 = has ipv4, b1 = has ipv6 */
 	uint8_t			incomplete;
 	uint8_t			nxdomain; /* authoritative: name does not exist */
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+	/*
+	 * The query that made us validated its results.  A later query that
+	 * has to validate may only be served from an entry that has this set,
+	 * and is then told LWS_ADNS_DNSSEC_VALID like the original requester
+	 */
+	uint8_t			dnssec_valid;
+#endif
 	/* addrinfo, lws_sa46, then name overallocated here */
 } lws_adns_cache_t;
 
@@ -239,7 +247,8 @@ lws_async_dns_retcode_t
 lws_async_dns_complete(lws_adns_q_t *q, lws_adns_cache_t *c);
 
 lws_adns_cache_t *
-lws_adns_get_cache(lws_async_dns_t *dns, const char *name);
+lws_adns_get_cache(lws_async_dns_t *dns, const char *name, uint16_t qtype,
+		   int need_valid);
 
 lws_adns_q_t *
 lws_adns_get_query(lws_async_dns_t *dns, adns_query_type_t qtype,

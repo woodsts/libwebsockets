@@ -170,8 +170,12 @@ lws_async_dns_complete(lws_adns_q_t *q, lws_adns_cache_t *c)
 	else
 		rc = LADNS_RET_FOUND;
 #if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
-	if (rc >= 0 && q->dnssec_valid)
+	if (rc >= 0 && q->dnssec_valid) {
 		rc |= LWS_ADNS_DNSSEC_VALID;
+		/* so a later requester served from the cache is told too */
+		if (c)
+			c->dnssec_valid = 1;
+	}
 #endif
 
 	q->completing = 1;
@@ -1311,8 +1315,17 @@ lws_adns_smd_destroy(struct lws_context *cx)
 
 #endif
 
+/*
+ * Find a completed cache entry for \p name that holds records of \p qtype
+ * (for A or AAAA, addresses).  The cache may hold several entries for one
+ * name, eg, its A records and its DNSKEY RRset, or the same records from a
+ * query that validated them and from one that didn't; if \p need_valid, only
+ * an entry whose query validated it will do.
+ */
+
 lws_adns_cache_t *
-lws_adns_get_cache(lws_async_dns_t *dns, const char *name)
+lws_adns_get_cache(lws_async_dns_t *dns, const char *name, uint16_t qtype,
+		   int need_valid)
 {
 	lws_adns_cache_t *c;
 
@@ -1323,11 +1336,28 @@ lws_adns_get_cache(lws_async_dns_t *dns, const char *name)
 
 	lws_start_foreach_dll_safe(struct lws_dll2 *, d, d1,
 				   lws_dll2_get_head(&dns->cached)) {
+		lws_adns_rr_t *rr;
+		int found = 0;
+
 		c = lws_container_of(d, lws_adns_cache_t, list);
 
-		// lwsl_wsi_notice(dns->wsi, "%s vs %s (inc %d)", name, c->name, c->incomplete);
+		if (c->incomplete || strcasecmp(name, c->name))
+			continue;
 
-		if (!c->incomplete && !strcasecmp(name, c->name)) {
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+		if (need_valid && !c->dnssec_valid)
+			continue;
+#else
+		(void)need_valid;
+#endif
+
+		if (qtype == LWS_ADNS_RECORD_A || qtype == LWS_ADNS_RECORD_AAAA)
+			found = !!c->results;
+		else
+			for (rr = c->rr_results; rr && !found; rr = rr->next)
+				found = rr->type == qtype;
+
+		if (found) {
 			/* Keep sorted by LRU: move to the head */
 			lws_dll2_remove(&c->list);
 			lws_dll2_add_head(&c->list, &dns->cached);
@@ -1808,7 +1838,13 @@ lws_async_dns_query(struct lws_context *context, int tsi, const char *name,
 	char *p;
 	int m = 0;
 	uint8_t want_dnssec = (qtype & LWS_ADNS_WANT_DNSSEC) ? 1 : 0;
-	
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+	/* the same decision lws_adns_q_validates() makes for a new query */
+	int validates = (dns->dnssec_mode == LWS_ADNS_DNSSEC_REQUIRE ||
+			 want_dnssec) &&
+			!(qtype & LWS_ADNS_INDICATE_LACKS_DNSSEC);
+#endif
+
 	qtype = (adns_query_type_t)(qtype & ~(uint32_t)LWS_ADNS_WANT_DNSSEC);
 
 	lwsl_cx_info(context, "entry %s", name);
@@ -1833,52 +1869,40 @@ lws_async_dns_query(struct lws_context *context, int tsi, const char *name,
 		wsi->io.adns_cb = cb;
 	}
 
-	/* there's a done, cached query we can just reuse? */
+	/*
+	 * There's a done, cached query we can just reuse?
+	 *
+	 * A query that has to validate can't be served what some query that
+	 * didn't validate left in the cache: those records were handed out as
+	 * plain FOUND, which a requester not looking for LWS_ADNS_DNSSEC_VALID
+	 * takes as good.
+	 */
 
-	c = (qtype & LWS_ADNS_NOCACHE) ? NULL : lws_adns_get_cache(dns, name);
+	c = (qtype & LWS_ADNS_NOCACHE) ? NULL :
+		lws_adns_get_cache(dns, name, (uint16_t)(qtype & 0xffff),
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+				   validates
+#else
+				   0
+#endif
+				   );
 	qtype = (adns_query_type_t)(qtype & ~(uint32_t)LWS_ADNS_NOCACHE);
-	if (c) {
-		int found = 0;
-		if (qtype == LWS_ADNS_RECORD_A || qtype == LWS_ADNS_RECORD_AAAA) {
-			if (c->results)
-				found = 1;
-		} else {
-			lws_adns_rr_t *rr = c->rr_results;
-			while (rr) {
-				if (rr->type == qtype) {
-					found = 1;
-					break;
-				}
-				rr = rr->next;
-			}
-		}
-
-		if (!found) {
-			lwsl_cx_info(context, "%s: cached but missing 0x%x, bypassing", name, qtype);
-			/*
-			 * We want a fresh query to replace this entry.  It
-			 * must stay owned by dns->cached until it is freed,
-			 * since that list is what lws_async_dns_deinit()
-			 * walks: unlinking it here and waiting for the ttl sul
-			 * leaked it if the context was destroyed first.
-			 *
-			 * If nobody holds its results, just destroy it now.
-			 * Otherwise flag it incomplete so lws_adns_get_cache()
-			 * skips it, and let the ttl sul or deinit free it.
-			 */
-			if (!c->refcount)
-				lws_adns_cache_destroy(c);
-			else
-				c->incomplete = 1;
-			c = NULL;
-		}
-	}
 
 	if (c) {
 		lwsl_cx_info(context, "%s: using cached, c->results %p, c->rr_results %p",
 			  name, c->results, c->rr_results);
 		m = (c->results || c->rr_results) ? LADNS_RET_FOUND :
 		    (c->nxdomain ? LADNS_RET_NXDOMAIN : LADNS_RET_FAILED);
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+		/*
+		 * Served from the cache, a validated result is still validated:
+		 * without this, the second requester of a name within its TTL
+		 * never saw LWS_ADNS_DNSSEC_VALID and, failing closed, refused
+		 * what the first one had accepted
+		 */
+		if (m == LADNS_RET_FOUND && c->dnssec_valid)
+			m |= LWS_ADNS_DNSSEC_VALID;
+#endif
 		/*
 		 * The callback gets c->results and releases it with
 		 * lws_async_dns_freeaddrinfo(); with only rr_results it gets
@@ -2334,22 +2358,27 @@ lws_async_dns_get_rr_cache(struct lws_context *context, const char *name,
 	if (!context || !name)
 		return NULL;
 
-	lws_start_foreach_dll(struct lws_dll2 *, d,
-			      lws_dll2_get_head(&context->async_dns.cached)) {
-		c = lws_container_of(d, lws_adns_cache_t, list);
+	/*
+	 * The same records may be cached from a query that validated them and
+	 * from one that didn't; a caller acting on LWS_ADNS_DNSSEC_VALID wants
+	 * the ones that were validated
+	 */
 
-		if (!strcmp(c->name, name) && c->rr_results) {
-			rr = c->rr_results;
-			while (rr) {
-				if (rr->type == qtype) {
-					if (paylen)
-						*paylen = rr->paylen;
-					return (const uint8_t *)&rr[1];
-				}
-				rr = rr->next;
-			}
+	c = lws_adns_get_cache(&context->async_dns, name, (uint16_t)qtype, 1);
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+	if (!c)
+		c = lws_adns_get_cache(&context->async_dns, name,
+				       (uint16_t)qtype, 0);
+#endif
+	if (!c)
+		return NULL;
+
+	for (rr = c->rr_results; rr; rr = rr->next)
+		if (rr->type == qtype) {
+			if (paylen)
+				*paylen = rr->paylen;
+			return (const uint8_t *)&rr[1];
 		}
-	} lws_end_foreach_dll(d);
 
 	return NULL;
 }

@@ -159,7 +159,9 @@ lws_async_dns_freeaddrinfo(const struct addrinfo **ai);
  * \param paylen: set to the payload length if found
  *
  * Retrieves a pointer to the payload of a cached DNS record that doesn't
- * normally result in an addrinfo (like DS, DNSKEY, TXT).
+ * normally result in an addrinfo (like DS, DNSKEY, TXT).  If the record is
+ * cached both from a lookup that DNSSEC-validated it and from one that didn't,
+ * the validated one is returned.
  * Returns NULL if not found or no cache entry exists.
  */
 LWS_VISIBLE LWS_EXTERN const uint8_t *

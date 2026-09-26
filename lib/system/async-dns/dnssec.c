@@ -526,7 +526,8 @@ lws_dnssec_dnskey_cb(struct lws *wsi, const char *name, const struct addrinfo *d
 		goto fail;
 	}
 
-	c = lws_adns_get_cache(q->dns, vctx->signer_name);
+	c = lws_adns_get_cache(q->dns, vctx->signer_name,
+			       LWS_ADNS_RECORD_DNSKEY, 0);
 	if (!c || !c->rr_results) {
 		lwsl_notice("%s: DNSKEY cache absent\n", __func__);
 		goto fail;
