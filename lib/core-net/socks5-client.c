@@ -339,6 +339,21 @@ lws_socks5c_rx(struct lws *wsi, const uint8_t *buf, size_t len,
 	}
 
 	*used = need;
+
+	/*
+	 * Until the tunnel is up only the proxy can be speaking, one reply
+	 * at a time: bytes after the reply are not socks.  They are also in
+	 * the way, since our next message is composed at the start of the
+	 * buffer the read came into.
+	 */
+	if (len > need &&
+	    lwsi_transport(wsi) != LTS_WAITING_SOCKS_CONNECT_REPLY) {
+		lwsl_wsi_err(wsi, "SOCKS: %d bytes after the reply",
+				  (int)(len - need));
+		*pcce = "socks trailing bytes";
+
+		return LW5CHS_RET_BAIL3;
+	}
 	lws_servbuf_trim(pt, buf + need); /* the reply is ours, the rest is not */
 
 
@@ -408,16 +423,20 @@ lws_socks5c_rx(struct lws *wsi, const uint8_t *buf, size_t len,
 		wsi->c_port = (uint16_t)wsi->a.vhost->socks_proxy_port;
 
 		/*
-		 * What follows the reply is the peer's, and is left for the
-		 * protocol (an smtp banner, say)... unless tls is to come:
-		 * the tls peer speaks second, so bytes ahead of our
-		 * ClientHello can only be the proxy's, and if we kept them
-		 * they would be replayed into the stream after a handshake
-		 * that verified the real origin, as its response.
+		 * What follows the reply is the peer's, and is left for a raw
+		 * protocol whose peer speaks first (an smtp banner, say).  For
+		 * the others the peer speaks second: bytes ahead of our
+		 * ClientHello or request can only be the proxy's, and if we
+		 * kept them they would be replayed into the stream after a
+		 * handshake that verified the real origin, as its response;
+		 * the request we compose next, at the start of the buffer the
+		 * read came into, would also compose over them first.
 		 */
-		if (*used < len && (wsi->use_ssl & LCCSCF_USE_SSL)) {
+		if (*used < len && ((wsi->use_ssl & LCCSCF_USE_SSL) ||
+				    wsi->role_ops != &role_ops_raw_skt)) {
 			lwsl_wsi_err(wsi, "SOCKS: %d bytes after the reply "
-					  "with tls to come", (int)(len - *used));
+					  "with our side to speak next",
+					  (int)(len - *used));
 			*pcce = "socks trailing bytes";
 
 			return LW5CHS_RET_BAIL3;
