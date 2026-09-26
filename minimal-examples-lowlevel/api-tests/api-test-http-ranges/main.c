@@ -387,7 +387,8 @@ case_expect(const struct xcase *c, struct rng *out, int max)
 	int n;
 
 	if (!c->gen_n) {
-		for (n = 0; n < (int)c->nexp && n < max; n++)
+		for (n = 0; n < (int)c->nexp && n < max &&
+			    n < (int)LWS_ARRAY_SIZE(c->exp); n++)
 			out[n] = c->exp[n];
 
 		return n;
