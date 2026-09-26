@@ -16,7 +16,8 @@
  *    v4 and a v6 address proves they are addresses of the same
  *    interface, and all names pointing at any of those addresses are
  *    collected as evidence on that one interface
- *  - dynamic-address records (${MHWC_DYNAMIC} / ${MHWC6_DYNAMIC})
+ *  - dynamic-address records (${EXTIP4} / ${EXTIP6}, and the legacy
+ *    ${MHWC_DYNAMIC} / ${MHWC6_DYNAMIC} spelling mixed in the same zone)
  *    resolve to the DHT-detected addresses passed with the request
  *  - an address shared by a nameserver name and a host name is marked
  *    ns without ns_only ("our infrastructure"), while an address only
@@ -426,8 +427,8 @@ static const char *z_example =
 	"www IN A 192.0.2.1\n"
 	"www IN AAAA 2001:db8::1\n"
 	"mail IN A 192.0.2.9\n"
-	"@ IN A ${MHWC_DYNAMIC}\n"
-	"@ 600 IN AAAA ${MHWC6_DYNAMIC}\n"
+	"@ IN A ${EXTIP4}\n"
+	"@ 600 IN AAAA ${EXTIP6}\n"
 	"dyn IN A ${MHWC_DYNAMIC}\n"
 	"dyn2	300	IN	A	${MHWC_DYNAMIC}\n"
 	"lonely IN LOC 1 2 3 N 4 5 6 E 10m\n"
@@ -521,8 +522,8 @@ int main(void)
 
 	/*
 	 * the dynamic-address records resolve against the detected
-	 * addresses; dyn binds both families, so one interface carries the
-	 * detected pair with dyn and dyn2 on it
+	 * addresses; the apex binds both families, so one interface carries the
+	 * detected pair with dyn and dyn2 on it too
 	 */
 
 	f = t_find_ip(&ti, "203.0.113.7");
@@ -574,7 +575,8 @@ int main(void)
 	/*
 	 * Without detected addresses (the external IP determination has not
 	 * produced any yet), the dynamic records must still group the same
-	 * names into an interface, standing in on the macro text itself
+	 * names into an interface, standing in on the macro text itself;
+	 * the legacy spelling folds onto the ${EXTIP4} / ${EXTIP6} one
 	 */
 
 	if (t_fetch_hints(&vhd, NULL, NULL)) {
@@ -585,11 +587,12 @@ int main(void)
 
 	fails += t_expect(ti.nif == 4, "four interfaces without hints");
 
-	f = t_find_ip(&ti, "${MHWC_DYNAMIC}");
+	f = t_find_ip(&ti, "${EXTIP4}");
 	fails += t_expect(!!f, "dynamic v4 groups on the macro text");
 	if (f) {
 		fails += t_expect(f->nips == 2 &&
-				  t_find_ip(&ti, "${MHWC6_DYNAMIC}") == f,
+				  t_find_ip(&ti, "${EXTIP6}") == f &&
+				  !t_find_ip(&ti, "${MHWC_DYNAMIC}"),
 				  "both macro families are one interface");
 		fails += t_expect(f->nnames == 3 &&
 				  !!t_find_name(f, "dyn.example.com.") &&

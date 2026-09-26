@@ -30,8 +30,9 @@
  * listed as further evidence about that interface.  Each address also
  * tracks the kinds of names that point at it, so an address that only
  * exists as NS glue can be told apart from one that is also used by host
- * records.  Dynamic-address records (${MHWC_DYNAMIC} / ${MHWC6_DYNAMIC})
- * resolve to the DHT-detected addresses the UI passes with the request.
+ * records.  Dynamic-address records (${EXTIP4} / ${EXTIP6}, or the legacy
+ * ${MHWC_DYNAMIC} / ${MHWC6_DYNAMIC}) resolve to the DHT-detected
+ * addresses the UI passes with the request.
  */
 
 #if !defined(LWS_PLUGIN_STATIC)
@@ -840,28 +841,32 @@ inv_resolve_rdata(const char *rdata, int is_v6, const char *ip4,
 	int fam = is_v6 ? AF_INET6 : AF_INET;
 
 	/*
-	 * Zonefiles spell the dynamic-address macros with the ${...}
-	 * strexp wrapper, which the signer expands before parsing; the
-	 * scanner sees the raw zonefile, so accept both spellings
+	 * Two families of dynamic-address macro reach the zonefiles: the
+	 * ${EXTIP4} / ${EXTIP6} strexp substitutions the signer's subst
+	 * callback expands before parsing (the documented spelling, and
+	 * the one the zonefile editor previews), and the legacy bare
+	 * MHWC_DYNAMIC / MHWC6_DYNAMIC tokens the rdata encoder swaps in
+	 * itself, which zonefiles also wrap as ${...}.  The scanner sees
+	 * the raw zonefile, so accept every spelling
 	 */
-	static const char * const dyn[2][2] = {
-		{ "${MHWC_DYNAMIC}", "MHWC_DYNAMIC" },
-		{ "${MHWC6_DYNAMIC}", "MHWC6_DYNAMIC" },
+	static const char * const dyn[2][3] = {
+		{ "${EXTIP4}", "${MHWC_DYNAMIC}", "MHWC_DYNAMIC" },
+		{ "${EXTIP6}", "${MHWC6_DYNAMIC}", "MHWC6_DYNAMIC" },
 	};
+	size_t n;
 
-	if (!strcmp(rdata, dyn[!!is_v6][0]) ||
-	    !strcmp(rdata, dyn[!!is_v6][1])) {
+	for (n = 0; n < LWS_ARRAY_SIZE(dyn[0]); n++) {
+		if (strcmp(rdata, dyn[!!is_v6][n]))
+			continue;
+
 		/*
 		 * subst is either empty or already canonical, see
-		 * handle_req_get_ip_inventory()
+		 * handle_req_get_ip_inventory().  Unresolved, every
+		 * spelling groups as the canonical macro, so names using
+		 * different spellings still land on one interface
 		 */
-		if (subst && subst[0]) {
-			lws_strncpy(out, subst, outlen);
-
-			return 1;
-		}
-
-		lws_strncpy(out, rdata, outlen);
+		lws_strncpy(out, subst && subst[0] ? subst : dyn[!!is_v6][0],
+			    outlen);
 
 		return 1;
 	}

@@ -414,13 +414,8 @@ function handleResponse(data) {
                 let content = '<table class="extip-table">';
                 ips.forEach(ip => {
                     let type = ip.includes(':') ? 'Ext IPv6' : 'Ext IPv4';
-                    if (type === 'Ext IPv6' && window.ipv6_suffix) {
-                        let parts = ip.split(':');
-                        if (parts.length > 2) {
-                            parts.pop();
-                            ip = parts.join(':') + ':' + window.ipv6_suffix;
-                        }
-                    }
+                    if (type === 'Ext IPv6')
+                        ip = ipv6WithSuffix(ip);
                     content += `<tr><td>${type}:</td><td><b>${escapeHtml(ip)}</b></td></tr>`;
                 });
                 content += '</table>';
@@ -433,9 +428,10 @@ function handleResponse(data) {
                 /*
                  * Dynamic-address zonefile records resolve against the
                  * detected addresses; refresh the inventory grouping now
-                 * they are known (or changed)
+                 * they are known (or changed).  Any fetch already made,
+                 * even one still in flight, went without them
                  */
-                if (window.ipInventory !== undefined)
+                if (window.ipInventoryRequested)
                     fetchIpInventory(0);
             }
             break;
@@ -832,11 +828,11 @@ function renderDomains(domains) {
 }
 
 /*
- * The DHT-detected external addresses, as first-seen v4 / v6 literals.
- * They resolve the zonefiles' dynamic-address records
- * (${MHWC_DYNAMIC} / ${MHWC6_DYNAMIC}) to real addresses for the
- * inventory grouping, exactly as the signer substitutes them at sign
- * time.
+ * The DHT-detected external addresses, as first-seen v4 / v6 literals,
+ * with the configured IPv6 interface suffix applied.  These are the
+ * values of the zonefiles' ${EXTIP4} / ${EXTIP6} macros (and the legacy
+ * MHWC_DYNAMIC / MHWC6_DYNAMIC spelling): the zonefile editor previews
+ * them, and the inventory grouping resolves dynamic records against them.
  */
 function currentExtIps() {
     const out = { ip4: '', ip6: '' };
@@ -848,15 +844,32 @@ function currentExtIps() {
         ? window.last_extip_data['ext-ips']
         : (window.last_extip_data['ext-ips'] + '').split(',');
     ips.forEach(ip => {
-        if (ip.includes(':')) { if (!out.ip6) out.ip6 = ip; }
-        else { if (!out.ip4) out.ip4 = ip; }
+        if (ip.includes(':')) {
+            if (!out.ip6) out.ip6 = ipv6WithSuffix(ip);
+        } else if (!out.ip4)
+            out.ip4 = ip;
     });
 
     return out;
 }
 
+function ipv6WithSuffix(ip) {
+    if (!window.ipv6_suffix)
+        return ip;
+
+    const parts = ip.split(':');
+    if (parts.length <= 2)
+        return ip;
+
+    parts.pop();
+
+    return parts.join(':') + ':' + window.ipv6_suffix;
+}
+
 function fetchIpInventory(cursor) {
     const ext = currentExtIps();
+
+    window.ipInventoryRequested = true;
     sendReq({ req: 'get_ip_inventory', cursor: cursor || 0,
               ip4: ext.ip4, ip6: ext.ip6 });
 }
@@ -2141,22 +2154,9 @@ function initApp() {
             console.log("getSubstitutions: window.last_extip_data is missing!");
             return subs;
         }
-        const ips = Array.isArray(window.last_extip_data['ext-ips']) ? window.last_extip_data['ext-ips'] : (window.last_extip_data['ext-ips'] + '').split(',');
-        let ext_ipv4 = '';
-        let ext_ipv6 = '';
-        ips.forEach(ip => {
-            if (ip.includes(':')) {
-                if (window.ipv6_suffix) {
-                    let parts = ip.split(':');
-                    if (parts.length > 2) {
-                        parts.pop();
-                        ext_ipv6 = parts.join(':') + ':' + window.ipv6_suffix;
-                    } else ext_ipv6 = ip;
-                } else ext_ipv6 = ip;
-            } else ext_ipv4 = ip;
-        });
-        if (ext_ipv4) subs.push({ key: 'EXTIP4', val: ext_ipv4 });
-        if (ext_ipv6) subs.push({ key: 'EXTIP6', val: ext_ipv6 });
+        const ext = currentExtIps();
+        if (ext.ip4) subs.push({ key: 'EXTIP4', val: ext.ip4 });
+        if (ext.ip6) subs.push({ key: 'EXTIP6', val: ext.ip6 });
         
         if (window.activeTls) {
             console.log("getSubstitutions: window.activeTls has", window.activeTls.length, "items", window.activeTls);
