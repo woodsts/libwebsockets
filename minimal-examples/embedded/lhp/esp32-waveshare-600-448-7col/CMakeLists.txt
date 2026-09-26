@@ -25,6 +25,37 @@ if (ESP_PLATFORM)
 	option(LWS_WITH_TLS_JIT_TRUST "With JIT Trust" ON)
 	set(LWS_WITH_TLS_JIT_TRUST ON)
 
+	#
+	# Protocol mix for this variant: http/1.1 + h3, no h2.
+	#
+	# h1 is needed for the captive portal detection stream, which is
+	# cleartext GET on port 80 and so can't be anything else.  Everything
+	# that actually talks to libwebsockets.org (the carousel page fetches
+	# and the OTA download) goes over h3 / QUIC instead of h2, so we can
+	# see what the QUIC role costs us on the heap compared to h2.
+	#
+	# The SS policy in ../policy.h picks h3 for those streams by itself
+	# when h2 isn't built (it prefers h2 when both are available, so the
+	# other boards' builds are unaffected).
+	#
+	# NOTE h3 on an esp32 has two build-time requirements:
+	#
+	#  - the IDF mbedtls must be one with the lws QUIC transport ops
+	#    patches, see https://libwebsockets.org/git/mbedtls/log?h=development
+	#    ... the lws build fails with a FATAL_ERROR explaining this if not
+	#
+	#  - CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y in sdkconfig, since QUIC only
+	#    exists on TLS1.3 (this example's sdkconfig sets it)
+	#
+	option(LWS_ROLE_H1 "With http/1.1" ON)
+	set(LWS_ROLE_H1 ON)
+	option(LWS_WITH_HTTP2 "With http/2" OFF)
+	set(LWS_WITH_HTTP2 OFF)
+	option(LWS_WITH_HTTP3 "With http/3" ON)
+	set(LWS_WITH_HTTP3 ON)
+	option(LWS_WITH_UDP "With UDP (needed by QUIC)" ON)
+	set(LWS_WITH_UDP ON)
+
 	option(LWS_WITH_COMPRESSED_BACKTRACES "Build with support for compressed backtraces" ON)
 	set(LWS_WITH_COMPRESSED_BACKTRACES ON)
 	set(LWS_COMPRESSED_BACKTRACES_SNIP_PRE 2 CACHE STRING "Amount of callstack to snip from top" FORCE)

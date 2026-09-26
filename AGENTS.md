@@ -59,7 +59,7 @@ The examples are not chaotic dumping grounds for trash.  They are supposed to sh
 the best way we know how to do things, that they can use in their own code reliably.  We
 should make an extra effort to keep them clean and as quality exemplars.
 
-## Coding
+## C Coding
 
 We are very concerned about security, architecturally and in the code.  We avoid using:
 
