@@ -1511,11 +1511,11 @@ dht_dnssec_ds_cb(struct lws *wsi, const char *ads, const struct addrinfo *result
 	/*
 	 * We are about to make this DS digest the sole trust anchor for the
 	 * object, so an answer the resolver could not validate is no use:
-	 * fail closed.  NB lws only actually clears this bit when the
-	 * context's dnssec mode is LWS_ADNS_DNSSEC_REQUIRE; selecting that
-	 * policy is a context-level decision outside this plugin, and in a
-	 * build without LWS_WITH_SYS_ASYNC_DNS_DNSSEC there is no validation
-	 * to honour at all.
+	 * fail closed.  The query asked with LWS_ADNS_WANT_DNSSEC, so the
+	 * resolver validated it down the chain of DS from the root whatever
+	 * the context's dnssec mode is; in a build without
+	 * LWS_WITH_SYS_ASYNC_DNS_DNSSEC there is no validation to honour at
+	 * all.
 	 */
 	if (!(n & LWS_ADNS_DNSSEC_VALID)) {
 		lwsl_warn("%s: refusing DS for %s that did not DNSSEC-validate\n",
