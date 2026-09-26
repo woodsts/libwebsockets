@@ -405,10 +405,26 @@ lws_log_use_cx_file(struct lws_log_cx *cx, int _new)
 
 #if !(defined(LWS_PLAT_OPTEE) && !defined(LWS_WITH_NETWORK))
 
-#if LWS_MAX_SMP == 1 && !defined(LWS_WITH_THREADPOOL)
-#define LWS_LOG_LINE_MAX	256
-#else
+/*
+ * More than one thread may log, not only with SMP or the threadpool: the
+ * async queue's workers and the txpacer thread log from inside lws, and
+ * applications log from their own threads.  So wherever there are pthreads,
+ * except on the small embedded platforms where lws runs no threads of its
+ * own, we must assume it.
+ */
+
+#if defined(LWS_HAVE_PTHREAD_H) && \
+    (LWS_MAX_SMP > 1 || defined(LWS_WITH_THREADPOOL) || \
+     defined(LWS_WITH_ASYNC_QUEUE) || \
+     (!defined(LWS_PLAT_OPTEE) && !defined(LWS_PLAT_BAREMETAL) && \
+      !defined(LWS_PLAT_FREERTOS)))
+#define LWS_LOG_THREADED
+#endif
+
+#if defined(LWS_LOG_THREADED)
 #define LWS_LOG_LINE_MAX	1024
+#else
+#define LWS_LOG_LINE_MAX	256
 #endif
 
 /*
@@ -417,8 +433,7 @@ lws_log_use_cx_file(struct lws_log_cx *cx, int _new)
  * call into the emit function, so an emit that itself logs cannot deadlock.
  */
 
-#if (LWS_MAX_SMP > 1 || defined(LWS_WITH_THREADPOOL)) && \
-    defined(LWS_HAVE_PTHREAD_H)
+#if defined(LWS_LOG_THREADED)
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 #define log_lock_take()		pthread_mutex_lock(&log_lock)
 #define log_lock_release()	pthread_mutex_unlock(&log_lock)
@@ -853,7 +868,7 @@ void
 __lws_logv(lws_log_cx_t *cx, lws_log_prepend_cx_t prep, void *obj,
 	   int filter, uint32_t dropped, const char *_fun, const char *format, va_list vl)
 {
-#if LWS_MAX_SMP == 1 && !defined(LWS_WITH_THREADPOOL)
+#if !defined(LWS_LOG_THREADED)
 	/* this is incompatible with multithreaded logging */
 	static char buf[LWS_LOG_LINE_MAX];
 #else

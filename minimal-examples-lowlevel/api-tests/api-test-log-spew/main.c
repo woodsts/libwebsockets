@@ -10,7 +10,8 @@
  * to the emit function, that a short tail of it is replayed in order when the
  * rate eases, that a stall in the middle of a spew is recognized for what it
  * was when the spew resumes, and that a surge short enough to end within the
- * retained tail is waved through without losing a line.
+ * retained tail is waved through without losing a line.  Where there are
+ * pthreads, it also has several threads spew at once.
  *
  * CI builders are overloaded as a matter of course, so we can be starved of
  * cpu at any point, for any length of time.  lws is expected to cope with that
@@ -22,6 +23,9 @@
 #include <libwebsockets.h>
 #include <string.h>
 #include <stdlib.h>
+#if defined(LWS_HAVE_PTHREAD_H)
+#include <pthread.h>
+#endif
 
 #if defined(WIN32)
 #include <windows.h>
@@ -104,6 +108,64 @@ num_after(const char *line, const char *what)
 	return q ? atoi(q + strlen(what)) : -1;
 }
 
+#if defined(LWS_HAVE_PTHREAD_H)
+
+#define THREADS		4
+#define THREAD_LINES	2000
+
+/*
+ * lws calls the emit function without holding its own lock, so while the
+ * threads spew, what they emit is tallied under ours instead of recorded
+ */
+
+static pthread_mutex_t thr_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t thr_seen[THREADS][THREAD_LINES];
+static int thr_emitted, thr_lost, thr_dupes, thr_other;
+static char threads_on;
+
+static void
+thread_emit(const char *line)
+{
+	const char *q;
+	int t, n;
+
+	if ((q = strstr(line, "lws: log spew eased: "))) {
+		q = strstr(q, " over ");
+		n = q ? num_after(q, "ms, ") : -1;
+		if (n < 0)
+			thr_other++;
+		else
+			thr_lost += n;
+		return;
+	}
+	if (strstr(line, "lws: log spew")) {
+		if (strstr(line, "span over "))
+			exit_ms = num_after(line, "span over ");
+		return;
+	}
+	if (strstr(line, "final"))
+		return;
+
+	q = strstr(line, "tt ");
+	if (!q || !(q = strchr(q + 3, ' '))) {
+		thr_other++;
+		return;
+	}
+	t = atoi(strstr(line, "tt ") + 3);
+	n = atoi(q + 1);
+	if (t < 0 || t >= THREADS || n < 0 || n >= THREAD_LINES) {
+		thr_other++;
+		return;
+	}
+	if (thr_seen[t][n])
+		thr_dupes++;
+	else
+		thr_emitted++;
+	thr_seen[t][n] = 1;
+}
+
+#endif
+
 static void
 test_emit(int level, const char *line)
 {
@@ -111,6 +173,15 @@ test_emit(int level, const char *line)
 	rec_t r = { REC_OTHER, 0, 0, 0 };
 
 	(void)level;
+
+#if defined(LWS_HAVE_PTHREAD_H)
+	if (threads_on) {
+		pthread_mutex_lock(&thr_lock);
+		thread_emit(line);
+		pthread_mutex_unlock(&thr_lock);
+		return;
+	}
+#endif
 
 	/* the line may carry a timestamp prefix, depending on the build */
 
@@ -366,6 +437,67 @@ check_spew(int stall_at)
 	return e;
 }
 
+#if defined(LWS_HAVE_PTHREAD_H)
+
+static void *
+spewer(void *d)
+{
+	int t = (int)(intptr_t)d, n;
+
+	for (n = 0; n < THREAD_LINES; n++)
+		lwsl_notice("tt %d %d\n", t, n);
+
+	return NULL;
+}
+
+/*
+ * lws never holds its log lock while it emits, so a replay on one thread and
+ * direct emits on another may interleave, and each thread's lines are not
+ * necessarily in order.  But none may come out twice, and every one of them
+ * must come out or be owned up to as not retained.
+ */
+
+static int
+check_threads(void)
+{
+	pthread_t pt[THREADS];
+	int t, e = 0, started;
+
+	threads_on = 1;
+	for (started = 0; started < THREADS; started++)
+		if (pthread_create(&pt[started], NULL, spewer,
+				   (void *)(intptr_t)started))
+			break;
+	for (t = 0; t < started; t++)
+		pthread_join(pt[t], NULL);
+
+	ease();
+	lwsl_notice("final\n");
+	threads_on = 0;
+
+	if (started != THREADS) {
+		fail("threads: only %d of %d started", started, THREADS);
+		return 1;
+	}
+	if (thr_dupes || thr_other) {
+		fail("threads: %d emitted twice, %d unexpected lines",
+		     thr_dupes, thr_other);
+		e++;
+	}
+	if (thr_emitted + thr_lost != THREADS * THREAD_LINES) {
+		fail("threads: %d emitted + %d not retained, of %d",
+		     thr_emitted, thr_lost, THREADS * THREAD_LINES);
+		e++;
+	}
+	if (!e)
+		pass("threads: %d emitted of %d lines from %d threads",
+		     thr_emitted, THREADS * THREAD_LINES, THREADS);
+
+	return e;
+}
+
+#endif
+
 int
 main(int argc, const char **argv)
 {
@@ -449,6 +581,15 @@ main(int argc, const char **argv)
 		pass("surge: %d lines all accounted for, %s spew mode",
 		     SURGE_LINES, find(REC_ENTERED) >= 0 ||
 				  find(REC_RESUMED) >= 0 ? "via" : "without");
+
+#if defined(LWS_HAVE_PTHREAD_H)
+	/*
+	 * 4: several threads spew at once: the spew handling is processwide,
+	 *    and lws' own threads, eg, the async queue workers, log too
+	 */
+
+	e += check_threads();
+#endif
 
 	/* NULL would leave test_emit() in place */
 	lws_set_log_level(LLL_ERR | LLL_WARN | LLL_NOTICE | LLL_USER,

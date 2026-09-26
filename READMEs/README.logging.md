@@ -388,6 +388,10 @@ mode, and if it ends within the tail that is retained, that is replayed intact,
 so a surge of up to about 73 lines is waved through losslessly.  A longer one
 loses its middle, as a spew does.
 
+Logging is threadsafe wherever there are pthreads, except on the small
+embedded platforms, where lws runs no threads of its own unless it is built
+with SMP, the threadpool or the async queue.
+
 The tunables are compile-time, and can be overridden on the compiler command
 line, eg, `-DLWS_LOG_SPEW_TAIL_LINES=20`:
 
