@@ -743,14 +743,16 @@ lws_http_status_page_send_pending(struct lws *wsi)
 	struct lws_context_per_thread *pt =
 			&wsi->a.context->pt[(int)wsi->tsi];
 	unsigned char *p = pt->serv_buf + LWS_PRE;
-	int len, n;
+	int len, n, sb;
 
+	sb = lws_servbuf_claim(pt, p, 512, "status page");
 	len = lws_http_status_page_body(p, 512, wsi->h2.pending_status_code,
 					wsi->h2.pending_status_text ?
 					wsi->h2.pending_status_text : "");
 	lws_http_status_page_drop_pending(wsi);
 
 	n = lws_write(wsi, p, (size_t)len, LWS_WRITE_HTTP_FINAL);
+	lws_servbuf_release(pt, sb, "status page");
 
 	return n != len;
 }
@@ -772,8 +774,8 @@ lws_return_http_status(struct lws *wsi, unsigned int code,
 				       NULL);
 }
 
-int
-_lws_return_http_status(struct lws *wsi, unsigned int code,
+static int
+_lws_return_http_status_composed(struct lws *wsi, unsigned int code,
 			const char *html_body, enum lws_token_indexes tok,
 			const char *val)
 {
@@ -942,6 +944,22 @@ _lws_return_http_status(struct lws *wsi, unsigned int code,
 	}
 
 	return m != n;
+}
+
+int
+_lws_return_http_status(struct lws *wsi, unsigned int code,
+			const char *html_body, enum lws_token_indexes tok,
+			const char *val)
+{
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf + LWS_PRE,
+				   wsi->a.context->pt_serv_buf_size - LWS_PRE,
+				   "_lws_return_http_status");
+	int r = _lws_return_http_status_composed(wsi, code, html_body, tok, val);
+
+	lws_servbuf_release(pt, sb, "_lws_return_http_status");
+
+	return r;
 }
 
 int

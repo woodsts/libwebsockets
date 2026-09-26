@@ -245,6 +245,49 @@ each function is in.
    More than the baseline fails; a step that brings it down re-baselines
    with `--update`.  The count only goes down.
 
+## The scratch buffer
+
+`pt->serv_buf` is one buffer per service thread that everything piles into
+so that nothing has to allocate: the rx pump reads into it behind `LWS_PRE`,
+the tx pulls (quic packets, h2 pps, file fragments) produce into it, and the
+composers (`lws_serve_http_file()`, `lws_return_http_status()`,
+`lws_http_redirect()`, the ws and mqtt handshakes, the client requests)
+build their bytes in it.  That is only sound while whoever is using a range
+of it is the only user of that range, and only inside one service pass: the
+next pass, for any socket on the thread, reuses it.  Ownership can be
+fragmented: while a read's unparsed tail is still live at the top, a
+composer may legitimately use the part below it that the parser has already
+consumed.
+
+The rules:
+
+1. A read's bytes belong to the rx pump until the role's `rx` returns.  A
+   role that has parsed or parked everything up to a point gives the
+   prefix back (`lws_servbuf_trim()`), and one that has parked the rest of
+   the read on its buflist, as the h1 server does before it acts on a
+   request, gives all of it back (`lws_servbuf_release_containing()`).
+   User code must not run while unparsed bytes it could compose over are
+   still in the buffer: park them first.
+2. A composer owns what it composes into from its first byte until the
+   write that consumes it returns, and hands the buffer over explicitly
+   when it delegates to another composer without having composed anything
+   (the file server's 404 and 416).
+3. Nothing holds any of it across a service pass boundary.
+
+`LWS_WITH_SERVBUF_CHECK` (Debug only, off by default, alongside
+`LWS_WITH_STATE_CHECK`) makes these checkable: each user claims its range
+with a name (`lws_servbuf_claim()`) into a small per-thread table, a claim
+overlapping a live one aborts naming both, a claim still live when
+`_lws_service_fd_tsi()` is entered aborts naming it.  Every serv_buf user
+in the library is instrumented; pointers that turn out not to be in
+serv_buf (a buflist segment) are ignored, so the same calls cover the
+parked paths.  Without the option the calls compile to nothing.  Two users
+are not claimed on purpose: the tls fallback peek (`recv(MSG_PEEK)` on a
+fresh connection in the accept path, nothing else can be live) and the
+ws client's copy of the server's `Sec-WebSocket-Extensions` list, which is
+claimed but can never reach the read's tail because the list is a
+substring of the response block that precedes that tail.
+
 ## Staging
 
 1. Finish the boundary violations that already exist: the socks and proxy

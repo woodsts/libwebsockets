@@ -3159,7 +3159,7 @@ rops_handle_POLLOUT_quic(struct lws *wsi)
 	struct lws_quic_netconn *qn = wsi->quic.qn;
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	struct lws_quic_tx_pkt tp;
-	int level, n, m;
+	int level, n, m, sb;
 	int blocked = 0;
 	int eagain_blocked = 0;
 
@@ -3309,16 +3309,20 @@ send_frames:
 	level = 0;
 	while (level < LWS_QUIC_LEVEL_COUNT) {
 		tp.level = level;
+		sb = lws_servbuf_claim(pt, pt->serv_buf,
+				       wsi->a.context->pt_serv_buf_size, "quic tx");
 		n = lws_quic_packet_tx(wsi, pt->serv_buf,
 				       wsi->a.context->pt_serv_buf_size, &tp);
-		if (!n)
-			break;
-		if (n == LWS_TX_WAIT) {
-			blocked = 1;
-			break;
-		}
-		if (n == LWS_TX_FAIL)
+		if (n == LWS_TX_FAIL || n == LWS_TX_WAIT || !n) {
+			lws_servbuf_release(pt, sb, "quic tx");
+			if (!n)
+				break;
+			if (n == LWS_TX_WAIT) {
+				blocked = 1;
+				break;
+			}
 			return LWS_HP_RET_BAIL_OK;
+		}
 
 		/* Fault Injection for dropping UDP packets (simulating packet loss) */
 		if (lws_fi(&wsi->fic, "quic_tx_drop")) {
@@ -3327,6 +3331,7 @@ send_frames:
 		} else
 			m = lws_io_send_dgram(wsi, pt->serv_buf, (size_t)n,
 					      tp.has_dest ? &tp.dest : NULL);
+		lws_servbuf_release(pt, sb, "quic tx");
 
 		m = lws_quic_packet_sent(wsi, &tp, m);
 		if (m < 0)
@@ -4338,14 +4343,21 @@ rops_close_via_role_protocol_quic(struct lws *wsi, enum lws_close_status reason)
 	lwsl_wsi_info(wsi, "sending CONNECTION_CLOSE (%d)", (int)reason);
 
 	while (level < LWS_QUIC_LEVEL_COUNT) {
+		int sb = lws_servbuf_claim(pt, pt->serv_buf,
+					   wsi->a.context->pt_serv_buf_size,
+					   "quic close tx");
+
 		tp.level = level;
 		n = lws_quic_packet_tx(wsi, pt->serv_buf,
 				       wsi->a.context->pt_serv_buf_size, &tp);
-		if (n <= 0) /* nothing more, or held or failed: best effort */
+		if (n <= 0) { /* nothing more, or held or failed: best effort */
+			lws_servbuf_release(pt, sb, "quic close tx");
 			break;
+		}
 
 		n = lws_io_send_dgram(wsi, pt->serv_buf, (size_t)n,
 				      tp.has_dest ? &tp.dest : NULL);
+		lws_servbuf_release(pt, sb, "quic close tx");
 		if (lws_quic_packet_sent(wsi, &tp, n))
 			break;
 

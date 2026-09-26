@@ -742,8 +742,8 @@ lws_find_string_in_file(const char *filename, const char *string, int stringlen)
 
 #if defined(LWS_WITH_HTTP_BASIC_AUTH)
 
-int
-lws_unauthorised_basic_auth(struct lws *wsi)
+static int
+lws_unauthorised_basic_auth_composed(struct lws *wsi)
 {
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	unsigned char *start = pt->serv_buf + LWS_PRE, *p = start,
@@ -775,6 +775,20 @@ lws_unauthorised_basic_auth(struct lws *wsi)
 
 	return lws_http_transaction_completed(wsi);
 
+}
+
+int
+lws_unauthorised_basic_auth(struct lws *wsi)
+{
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf + LWS_PRE,
+				   wsi->a.context->pt_serv_buf_size - LWS_PRE,
+				   "lws_unauthorised_basic_auth");
+	int r = lws_unauthorised_basic_auth_composed(wsi);
+
+	lws_servbuf_release(pt, sb, "lws_unauthorised_basic_auth");
+
+	return r;
 }
 
 #endif
@@ -2967,6 +2981,13 @@ raw_transition:
 			len = 0;
 		}
 
+		/*
+		 * From here the response is composed in serv_buf: whatever
+		 * of the read was ours is parsed or parked, the pump's claim
+		 * on it is done with (it ends at *buf)
+		 */
+		lws_servbuf_release_containing(pt, *buf);
+
 		n = lws_http_action(wsi);
 
 		return n;
@@ -3026,6 +3047,8 @@ upgrade_h2c:
 #endif
 #if defined(LWS_ROLE_WS)
 upgrade_ws:
+		/* the request is ours, what follows it in the read is not */
+		lws_servbuf_trim(pt, *buf);
 		if (lws_process_ws_upgrade(wsi))
 			goto bail_nuke_ah;
 
@@ -3348,8 +3371,8 @@ lws_is_ascii_headers(const char *buf, int len)
 	return 1;
 }
 
-int
-lws_serve_http_file(struct lws *wsi, const char *file, const char *content_type,
+static int
+lws_serve_http_file_composed(struct lws *wsi, const char *file, const char *content_type,
 		    const char *other_headers, int other_headers_len)
 {
 	struct lws_context *context = lws_get_context(wsi);
@@ -3405,6 +3428,8 @@ lws_serve_http_file(struct lws *wsi, const char *file, const char *content_type,
 		if (!wsi->http.fop_fd) {
 			lwsl_info("%s: Unable to open: '%s': errno %d\n",
 				  __func__, file, errno);
+			/* nothing composed yet: the status page has the buffer */
+			lws_servbuf_release_containing(pt, response);
 			if (lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND,
 						   NULL))
 						return -1;
@@ -3472,6 +3497,8 @@ lws_serve_http_file(struct lws *wsi, const char *file, const char *content_type,
 			     "bytes */%llu",
 			     (unsigned long long)wsi->http.filelen);
 
+		/* nothing composed yet: the status page has the buffer */
+		lws_servbuf_release_containing(pt, response);
 		_lws_return_http_status(wsi,
 				HTTP_STATUS_REQ_RANGE_NOT_SATISFIABLE, NULL,
 				WSI_TOKEN_HTTP_CONTENT_RANGE, cache_control);
@@ -3811,6 +3838,21 @@ bail:
 	lws_vfs_file_close(&wsi->http.fop_fd);
 
 	return -1;
+}
+
+int
+lws_serve_http_file(struct lws *wsi, const char *file, const char *content_type,
+		    const char *other_headers, int other_headers_len)
+{
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf + LWS_PRE,
+				   wsi->a.context->pt_serv_buf_size - LWS_PRE,
+				   "lws_serve_http_file");
+	int r = lws_serve_http_file_composed(wsi, file, content_type, other_headers, other_headers_len);
+
+	lws_servbuf_release(pt, sb, "lws_serve_http_file");
+
+	return r;
 }
 #endif
 

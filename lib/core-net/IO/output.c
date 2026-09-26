@@ -277,7 +277,7 @@ lws_serve_http_file_fragment(struct lws *wsi)
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	unsigned char *buf = pt->serv_buf + LWS_PRE, *p = NULL;
 	enum lws_write_protocol wp;
-	int n, m, last;
+	int n, m, last, sb;
 
 	do {
 		/*
@@ -317,19 +317,23 @@ lws_serve_http_file_fragment(struct lws *wsi)
 		}
 #endif
 
+		sb = lws_servbuf_claim(pt, buf,
+				       wsi->a.context->pt_serv_buf_size - LWS_PRE,
+				       "file tx");
 		n = lws_http_file_tx(wsi, buf,
 				     wsi->a.context->pt_serv_buf_size - LWS_PRE,
 				     &p, &wp, &last);
-		if (n == LWS_TX_FAIL)
-			return -1;
-		if (n == LWS_TX_WAIT)
-			return 0;
+		if (n == LWS_TX_FAIL || n == LWS_TX_WAIT) {
+			lws_servbuf_release(pt, sb, "file tx");
+			return n == LWS_TX_FAIL ? -1 : 0;
+		}
 
 		if (n > 0) {
 			lws_set_timeout(wsi, PENDING_TIMEOUT_HTTP_CONTENT,
 					(int)wsi->a.context->timeout_secs);
 
 			m = lws_write(wsi, p, (size_t)n, wp);
+			lws_servbuf_release(pt, sb, "file tx");
 			if (m < 0)
 				goto had_it;
 			if (m != n) {
@@ -341,8 +345,10 @@ lws_serve_http_file_fragment(struct lws *wsi)
 				lwsl_wsi_notice(wsi, "role took %d of %d", m, n);
 				goto had_it;
 			}
-		} else
+		} else {
+			lws_servbuf_release(pt, sb, "file tx");
 			last = 1;
+		}
 
 		/*
 		 * the file is sent when lws holds none of it; waiting for the

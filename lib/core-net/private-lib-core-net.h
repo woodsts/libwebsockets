@@ -458,6 +458,20 @@ struct lws_context_per_thread {
 	 * of any socket can likewise use it and overwrite)
 	 */
 	unsigned char *serv_buf;
+#if defined(LWS_WITH_SERVBUF_CHECK)
+	/*
+	 * Who holds which range of serv_buf right now: a claim is a range
+	 * and a name, several may be live at once if their ranges do not
+	 * overlap (the rx pump's, trimmed to what is still unconsumed, and a
+	 * composer's below it), and none may be live when a service pass
+	 * starts or ends.  See lws_servbuf_claim().
+	 */
+	struct lws_servbuf_claim {
+		const unsigned char	*s;	/* NULL: slot free */
+		const unsigned char	*e;
+		const char		*who;
+	} servbuf_claims[4];
+#endif
 
 	struct lws_pollfd *fds;
 	lws_dll2_owner_t	foreign_pfd_owner;

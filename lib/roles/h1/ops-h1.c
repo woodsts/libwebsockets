@@ -50,6 +50,7 @@ int
 lws_read_h1(struct lws *wsi, unsigned char *buf, lws_filepos_t len,
 	    int caller_closes)
 {
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	unsigned char *last_char, *oldbuf = buf;
 	lws_filepos_t body_chunk_len;
 	size_t n;
@@ -231,6 +232,8 @@ http_postbody:
 			}
 			wsi->http.rx_content_remain -= body_chunk_len;
 			// len -= body_chunk_len;
+			/* the chunk is delivered from the read: still live */
+			lws_servbuf_trim(pt, buf);
 #ifdef LWS_WITH_CGI
 			if (wsi->http.cgi) {
 				struct lws_cgi_args args;
@@ -288,6 +291,7 @@ http_postbody:
 #endif
 			lwsl_info("%s: advancing buf by %d\n", __func__, (int)n);
 			buf += n;
+			lws_servbuf_trim(pt, buf);
 
 			if (wsi->http.rx_chunked) {
 				/*
@@ -797,6 +801,10 @@ rops_handle_POLLOUT_h1(struct lws *wsi)
 				len = max;
 
 			if (len) {
+				int sb = lws_servbuf_claim(pt,
+						pt->serv_buf + LWS_PRE, len,
+						"h1 proxy body");
+
 				memcpy(pt->serv_buf + LWS_PRE, buf, len);
 
 				lwsl_debug("%s: %s: proxying body %d %d %d %d %d\n",
@@ -809,6 +817,7 @@ rops_handle_POLLOUT_h1(struct lws *wsi)
 
 				n = lws_write(wsi, pt->serv_buf + LWS_PRE, len,
 					      LWS_WRITE_HTTP);
+				lws_servbuf_release(pt, sb, "h1 proxy body");
 				if (n < 0) {
 					lwsl_err("%s: PROXY_BODY: write %d failed\n",
 						 __func__, (int)len);

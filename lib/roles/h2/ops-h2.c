@@ -342,13 +342,16 @@ rops_handle_POLLOUT_h2(struct lws *wsi)
 			struct lws_context_per_thread *pt =
 					&wsi->a.context->pt[(int)wsi->tsi];
 			struct lws_h2_protocol_send *pps;
-			int n;
+			int n, sb;
 
 			/*
 			 * compose, write, then the consequences: the
 			 * SETTINGS ack's start the first response, whose
 			 * bytes must follow the ack's
 			 */
+			sb = lws_servbuf_claim(pt, pt->serv_buf,
+					       wsi->a.context->pt_serv_buf_size,
+					       "h2 pps tx");
 			n = lws_h2_pps_tx(wsi, pt->serv_buf,
 					  wsi->a.context->pt_serv_buf_size,
 					  &pps);
@@ -357,6 +360,7 @@ rops_handle_POLLOUT_h2(struct lws *wsi)
 				lws_free(pps);
 				n = LWS_TX_FAIL;
 			}
+			lws_servbuf_release(pt, sb, "h2 pps tx");
 			if (n < 0 || lws_h2_pps_done(wsi, pps)) {
 				lwsi_set_skt_unusable(wsi, 1);
 				return LWS_HP_RET_BAIL_DIE;

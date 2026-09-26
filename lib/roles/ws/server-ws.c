@@ -653,8 +653,8 @@ alloc_ws:
 	return lws_process_ws_upgrade2(wsi);
 }
 
-int
-handshake_0405(struct lws_context *context, struct lws *wsi)
+static int
+handshake_0405_composed(struct lws_context *context, struct lws *wsi)
 {
 	struct lws_context_per_thread *pt = &context->pt[(int)wsi->tsi];
 	struct lws_process_html_args args;
@@ -813,6 +813,19 @@ handshake_0405(struct lws_context *context, struct lws *wsi)
 bail:
 	/* caller will free up his parsing allocations */
 	return -1;
+}
+
+int
+handshake_0405(struct lws_context *context, struct lws *wsi)
+{
+	struct lws_context_per_thread *pt = &context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf, context->pt_serv_buf_size,
+				   "ws server handshake");
+	int r = handshake_0405_composed(context, wsi);
+
+	lws_servbuf_release(pt, sb, "ws server handshake");
+
+	return r;
 }
 
 

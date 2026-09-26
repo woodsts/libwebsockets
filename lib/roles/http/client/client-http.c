@@ -52,6 +52,7 @@ int
 lws_h1_client_rx(struct lws *wsi, const uint8_t *buf, size_t len,
 		 int from_transport)
 {
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	const char *cce;
 	int n, m;
 #if defined(LWS_CLIENT_HTTP_PROXYING)
@@ -59,6 +60,7 @@ lws_h1_client_rx(struct lws *wsi, const uint8_t *buf, size_t len,
 #endif
 
 	(void)from_transport;
+	(void)pt;
 
 #if defined(LWS_CLIENT_HTTP_PROXYING)
 	if (lwsi_state(wsi) == LRS_WAITING_PROXY_REPLY) {
@@ -166,6 +168,8 @@ lws_h1_client_rx(struct lws *wsi, const uint8_t *buf, size_t len,
 		goto fail;
 	}
 	m = (int)len - n;
+	/* the block is ours, what follows it in the read is not */
+	lws_servbuf_trim(pt, buf + m);
 
 #if defined(LWS_WITH_SECURE_STREAMS_BUFFER_DUMP)
 	do {
@@ -232,10 +236,13 @@ lws_h1_client_issue_handshake(struct lws *wsi)
 	struct lws_context_per_thread *pt = &context->pt[(int)wsi->tsi];
 	char *p = (char *)&pt->serv_buf[0], *end = p + context->pt_serv_buf_size;
 	char *sb = p;
-	int n;
+	int n, sbc;
 
+	sbc = lws_servbuf_claim(pt, sb, context->pt_serv_buf_size,
+				"h1 client handshake");
 	p = lws_generate_client_handshake(wsi, p, lws_ptr_diff_size_t(end, p));
 	if (p == NULL) {
+		lws_servbuf_release(pt, sbc, "h1 client handshake");
 		lwsl_err("Failed to generate handshake for client\n");
 		lws_close_free_wsi(wsi, LWS_CLOSE_STATUS_NOSTATUS, "chs");
 
@@ -249,6 +256,7 @@ lws_h1_client_issue_handshake(struct lws *wsi)
 
 	n = lws_ssl_capable_write(wsi, (unsigned char *)sb,
 				  lws_ptr_diff_size_t(p, sb));
+	lws_servbuf_release(pt, sbc, "h1 client handshake");
 	switch (n) {
 	case LWS_SSL_CAPABLE_ERROR:
 		lwsl_debug("ERROR writing to client socket\n");

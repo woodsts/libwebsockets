@@ -87,7 +87,7 @@ lws_h3_log_path_sans_urlargs(char *buf, size_t len, const char *path)
 
 #if defined(LWS_WITH_CLIENT)
 static int
-lws_h3_client_handshake(struct lws *wsi)
+lws_h3_client_handshake_composed(struct lws *wsi)
 {
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	uint8_t *buf, *start, *p, *end;
@@ -237,6 +237,20 @@ lws_h3_client_handshake(struct lws *wsi)
 	/* the caller says what follows: a body, or the response */
 
 	return 0;
+}
+
+static int
+lws_h3_client_handshake(struct lws *wsi)
+{
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf + LWS_PRE,
+				   wsi->a.context->pt_serv_buf_size - LWS_PRE,
+				   "lws_h3_client_handshake");
+	int r = lws_h3_client_handshake_composed(wsi);
+
+	lws_servbuf_release(pt, sb, "lws_h3_client_handshake");
+
+	return r;
 }
 #endif
 

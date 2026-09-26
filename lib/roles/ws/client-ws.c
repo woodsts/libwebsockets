@@ -458,6 +458,8 @@ check_extensions:
 		*cce = "HS: EXT: list too big";
 		goto bail2;
 	}
+	n = lws_servbuf_claim(pt, sb, strlen(sb) + 1, "ws client ext list");
+	lws_servbuf_release(pt, n, "ws client ext list");
 
 	c = sb;
 	n = 0;

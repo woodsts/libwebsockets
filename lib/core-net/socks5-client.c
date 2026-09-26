@@ -249,7 +249,7 @@ lws_socks5c_greet(struct lws *wsi, const char **pcce)
 {
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	ssize_t plen;
-	int n;
+	int n, sb;
 
 	/* socks proxy */
 	if (!wsi->a.vhost->socks_proxy_port)
@@ -260,7 +260,9 @@ lws_socks5c_greet(struct lws *wsi, const char **pcce)
 		return -1;
 	}
 	// lwsl_hexdump_notice(pt->serv_buf, plen);
+	sb = lws_servbuf_claim(pt, pt->serv_buf, (size_t)plen, "socks greet");
 	n = lws_issue_raw(wsi, pt->serv_buf, (size_t)plen);
+	lws_servbuf_release(pt, sb, "socks greet");
 	if (n < 0) {
 		lwsl_wsi_debug(wsi, "ERROR writing socks greeting");
 		*pcce = "socks write failed";
@@ -337,6 +339,7 @@ lws_socks5c_rx(struct lws *wsi, const uint8_t *buf, size_t len,
 	}
 
 	*used = need;
+	lws_servbuf_trim(pt, buf + need); /* the reply is ours, the rest is not */
 
 
 	switch (lwsi_transport(wsi)) {
@@ -431,6 +434,9 @@ lws_socks5c_rx(struct lws *wsi, const uint8_t *buf, size_t len,
 
 socks_send_l:
 	// lwsl_hexdump_notice(pt->serv_buf, plen);
+	/* composed above, into what must not have been the rest of the read */
+	n = lws_servbuf_claim(pt, pt->serv_buf, (size_t)plen, "socks rx compose");
+	lws_servbuf_release(pt, n, "socks rx compose");
 	n = lws_issue_raw(wsi, pt->serv_buf, (size_t)plen);
 	if (n < 0) {
 		lwsl_wsi_debug(wsi, "ERROR writing to socks proxy");

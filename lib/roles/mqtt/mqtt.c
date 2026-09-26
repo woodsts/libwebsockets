@@ -1892,6 +1892,10 @@ bail1:
 				if (chunk > len)
 					chunk = len;
 
+				/* delivered from the read: still live */
+				lws_servbuf_trim(&wsi->a.context->pt[(int)wsi->tsi],
+						 buf);
+
 				lws_start_foreach_dll_safe(struct lws_dll2 *, d, d1,
 				                           lws_dll2_get_head(&wsi->mux.child_list_owner)) {
 				   struct lws *w = lws_container_of(d, struct lws, mux.sibling_list);
@@ -2230,8 +2234,8 @@ lws_mqtt_fill_fixed_header(uint8_t *p, lws_mqtt_control_packet_t ctrl_pkt_type,
 	return 0;
 }
 
-int
-lws_mqtt_client_send_publish(struct lws *wsi, lws_mqtt_publish_param_t *pub,
+static int
+lws_mqtt_client_send_publish_composed(struct lws *wsi, lws_mqtt_publish_param_t *pub,
 			     const void *buf, uint32_t len, int is_complete)
 {
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
@@ -2409,7 +2413,22 @@ do_write:
 }
 
 int
-lws_mqtt_client_send_subcribe(struct lws *wsi, lws_mqtt_subscribe_param_t *sub)
+lws_mqtt_client_send_publish(struct lws *wsi, lws_mqtt_publish_param_t *pub,
+			     const void *buf, uint32_t len, int is_complete)
+{
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf,
+				   wsi->a.context->pt_serv_buf_size,
+				   "lws_mqtt_client_send_publish");
+	int r = lws_mqtt_client_send_publish_composed(wsi, pub, buf, len, is_complete);
+
+	lws_servbuf_release(pt, sb, "lws_mqtt_client_send_publish");
+
+	return r;
+}
+
+static int
+lws_mqtt_client_send_subcribe_composed(struct lws *wsi, lws_mqtt_subscribe_param_t *sub)
 {
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
 	uint8_t *b = (uint8_t *)pt->serv_buf + LWS_PRE, *start = b, *p = start,
@@ -2619,7 +2638,21 @@ lws_mqtt_client_send_subcribe(struct lws *wsi, lws_mqtt_subscribe_param_t *sub)
 }
 
 int
-lws_mqtt_client_send_unsubcribe(struct lws *wsi,
+lws_mqtt_client_send_subcribe(struct lws *wsi, lws_mqtt_subscribe_param_t *sub)
+{
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf + LWS_PRE,
+				   wsi->a.context->pt_serv_buf_size - LWS_PRE,
+				   "lws_mqtt_client_send_subcribe");
+	int r = lws_mqtt_client_send_subcribe_composed(wsi, sub);
+
+	lws_servbuf_release(pt, sb, "lws_mqtt_client_send_subcribe");
+
+	return r;
+}
+
+static int
+lws_mqtt_client_send_unsubcribe_composed(struct lws *wsi,
 				const lws_mqtt_subscribe_param_t *unsub)
 {
 	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
@@ -2805,6 +2838,21 @@ lws_mqtt_client_send_unsubcribe(struct lws *wsi,
 			    3 * LWS_USEC_PER_SEC);
 
 	return 0;
+}
+
+int
+lws_mqtt_client_send_unsubcribe(struct lws *wsi,
+				const lws_mqtt_subscribe_param_t *unsub)
+{
+	struct lws_context_per_thread *pt = &wsi->a.context->pt[(int)wsi->tsi];
+	int sb = lws_servbuf_claim(pt, pt->serv_buf + LWS_PRE,
+				   wsi->a.context->pt_serv_buf_size - LWS_PRE,
+				   "lws_mqtt_client_send_unsubcribe");
+	int r = lws_mqtt_client_send_unsubcribe_composed(wsi, unsub);
+
+	lws_servbuf_release(pt, sb, "lws_mqtt_client_send_unsubcribe");
+
+	return r;
 }
 
 /*

@@ -35,7 +35,7 @@ lws_client_connect_4_established(struct lws *wsi, struct lws *wsi_piggyback,
 #endif
 	const char *cce = "";
 #if (_LWS_ENABLED_LOGS & LLL_INFO)
-	int rawish;
+	int rawish, sb;
 #endif
 	int n;
 
@@ -81,6 +81,7 @@ lws_client_connect_4_established(struct lws *wsi, struct lws *wsi_piggyback,
 
 		lwsl_wsi_info(wsi, "going via proxy");
 
+		sb = lws_servbuf_claim(pt, pt->serv_buf, room, "proxy CONNECT");
 		plen = lws_snprintf((char *)pt->serv_buf, room,
 			"CONNECT %s:%u HTTP/1.1\x0d\x0a"
 			"Host: %s:%u\x0d\x0a"
@@ -104,6 +105,7 @@ lws_client_connect_4_established(struct lws *wsi, struct lws *wsi_piggyback,
 			 */
 			cce = "proxy CONNECT too long";
 			lwsl_wsi_err(wsi, "%s", cce);
+			lws_servbuf_release(pt, sb, "proxy CONNECT");
 			goto failed;
 		}
 
@@ -121,11 +123,14 @@ lws_client_connect_4_established(struct lws *wsi, struct lws *wsi_piggyback,
 		else
 			if (lws_hdr_simple_create(wsi,
 					_WSI_TOKEN_CLIENT_PEER_ADDRESS,
-					wsi->a.vhost->http.http_proxy_address))
+					wsi->a.vhost->http.http_proxy_address)) {
+			lws_servbuf_release(pt, sb, "proxy CONNECT");
 			goto failed;
+		}
 		wsi->c_port = (uint16_t)wsi->a.vhost->http.http_proxy_port;
 
 		n = lws_issue_raw(wsi, pt->serv_buf, (size_t)plen);
+		lws_servbuf_release(pt, sb, "proxy CONNECT");
 		if (n < 0) {
 			lwsl_wsi_debug(wsi, "ERROR writing to proxy socket");
 			cce = "proxy write failed";
