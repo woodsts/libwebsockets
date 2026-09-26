@@ -36,6 +36,8 @@ for arg in "$@"; do
 			[ -n "$FIX_TREE" ] && break
 		fi
 		;;
+	*)
+		;;
 	esac
 done
 [ -z "$FIX_TREE" ] && FIX_TREE=$(lws_fixture_tree_from "$(pwd)")
