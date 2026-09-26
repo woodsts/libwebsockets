@@ -2868,6 +2868,48 @@ raw_transition:
 			goto raw_transition;
 		}
 
+		/*
+		 * Whatever follows the headers in this read is request body,
+		 * or the next pipelined request.  If it is sitting in
+		 * pt->serv_buf, the action below can overwrite it before it
+		 * is looked at: lws_return_http_status(), lws_serve_http_file()
+		 * and lws_http_redirect() build their response in that same
+		 * buffer, synchronously, from inside the user's
+		 * LWS_CALLBACK_HTTP.  A Content-Length body that got clobbered
+		 * was only ever going to be counted and discarded, but a
+		 * chunked body's framing has to survive intact, and a
+		 * pipelined request must not be lost.
+		 *
+		 * Nor is the action the only thing that composes in it: an
+		 * upgrade's 101 is built there too, and so is a refusal, while
+		 * a ws client that did not wait for the 101 (RFC 6455 4.1
+		 * says it must) may have frames in the same read.
+		 *
+		 * Park it on the buflist now, ahead of everything that acts
+		 * on the request.  Our caller then sees the whole read as
+		 * consumed, and the parked bytes are offered again from the
+		 * buflist once the action or upgrade has left us in a state
+		 * that can take them.
+		 */
+		if (len && *buf >= pt->serv_buf &&
+		    *buf < pt->serv_buf + context->pt_serv_buf_size) {
+			m = lws_buflist_append_segment(&wsi->buflist, *buf, len);
+			if (m < 0)
+				goto bail_nuke_ah;
+			if (m && lws_dll2_is_detached(&wsi->dll_buflist))
+				lws_dll2_add_head(&wsi->dll_buflist,
+						  &pt->dll_buflist_owner);
+			*buf += len;
+			len = 0;
+		}
+
+		/*
+		 * From here on the request is acted on, and serv_buf composed
+		 * in: whatever of the read was ours is parsed or parked, the
+		 * pump's claim on it is done with (it ends at *buf)
+		 */
+		lws_servbuf_release_containing(pt, *buf);
+
 		lws_wsi_event(wsi, LWS_WSIEV_REQ_HDRS_COMPLETE);
 		lws_set_timeout(wsi, NO_PENDING_TIMEOUT, 0);
 
@@ -2952,42 +2994,6 @@ raw_transition:
 		lwsl_debug("%s: %s: ah %p\n", __func__, lws_wsi_tag(wsi),
 			   (void *)wsi->stream.ah);
 
-		/*
-		 * Whatever follows the headers in this read is request body,
-		 * or the next pipelined request.  If it is sitting in
-		 * pt->serv_buf, the action below can overwrite it before it
-		 * is looked at: lws_return_http_status(), lws_serve_http_file()
-		 * and lws_http_redirect() build their response in that same
-		 * buffer, synchronously, from inside the user's
-		 * LWS_CALLBACK_HTTP.  A Content-Length body that got clobbered
-		 * was only ever going to be counted and discarded, but a
-		 * chunked body's framing has to survive intact, and a
-		 * pipelined request must not be lost.
-		 *
-		 * Park it on the buflist now, ahead of the action.  Our
-		 * caller then sees the whole read as consumed, and the parked
-		 * bytes are offered again from the buflist once the action has
-		 * left us in a state that can take them.
-		 */
-		if (len && *buf >= pt->serv_buf &&
-		    *buf < pt->serv_buf + context->pt_serv_buf_size) {
-			m = lws_buflist_append_segment(&wsi->buflist, *buf, len);
-			if (m < 0)
-				goto bail_nuke_ah;
-			if (m && lws_dll2_is_detached(&wsi->dll_buflist))
-				lws_dll2_add_head(&wsi->dll_buflist,
-						  &pt->dll_buflist_owner);
-			*buf += len;
-			len = 0;
-		}
-
-		/*
-		 * From here the response is composed in serv_buf: whatever
-		 * of the read was ours is parsed or parked, the pump's claim
-		 * on it is done with (it ends at *buf)
-		 */
-		lws_servbuf_release_containing(pt, *buf);
-
 		n = lws_http_action(wsi);
 
 		return n;
@@ -3047,8 +3053,6 @@ upgrade_h2c:
 #endif
 #if defined(LWS_ROLE_WS)
 upgrade_ws:
-		/* the request is ours, what follows it in the read is not */
-		lws_servbuf_trim(pt, *buf);
 		if (lws_process_ws_upgrade(wsi))
 			goto bail_nuke_ah;
 
