@@ -150,6 +150,14 @@ static size_t		r_body_len;
 static int		r_trunc;
 
 static struct lws	*current_wsi;
+/*
+ * The wsi the current job's response arrived on, and the previous job's one
+ * until its close has been seen.  A job is judged on COMPLETED, but on h2 the
+ * stream's CLOSED only follows on a later service pass, by when the next job
+ * may already be in flight: that CLOSED belongs to the finished job, not the
+ * new one.
+ */
+static struct lws	*resp_wsi, *spent_wsi;
 static lws_sorted_usec_list_t sul_next, sul_watchdog;
 
 static void run_next_job(lws_sorted_usec_list_t *sul);
@@ -240,11 +248,22 @@ callback_cli(struct lws *wsi, enum lws_callback_reasons reason, void *user,
 	const struct job *j = &jobs[jidx];
 
 	/*
-	 * No wsi filter here: on h2 (and h3) the request moves to a mux child
-	 * wsi that is not the one lws_client_connect_via_info() handed back,
-	 * so comparing against that pointer silently drops the whole
-	 * response.  Only one job is ever in flight per context.
+	 * No filter on the wsi lws_client_connect_via_info() handed back: on
+	 * h2 (and h3) the request moves to a mux child wsi that is not that
+	 * one, so comparing against that pointer silently drops the whole
+	 * response.  Only one job is ever in flight per context, but the
+	 * previous job's response wsi may still be closing, so its late
+	 * completion callbacks are kept away from the current job.
 	 */
+
+	if (jobs_active && wsi == spent_wsi &&
+	    (reason == LWS_CALLBACK_COMPLETED_CLIENT_HTTP ||
+	     reason == LWS_CALLBACK_CLOSED_CLIENT_HTTP)) {
+		if (reason == LWS_CALLBACK_CLOSED_CLIENT_HTTP)
+			spent_wsi = NULL;
+
+		return lws_callback_http_dummy(wsi, reason, user, in, len);
+	}
 
 	switch (reason) {
 
@@ -306,6 +325,7 @@ callback_cli(struct lws *wsi, enum lws_callback_reasons reason, void *user,
 	}
 
 	case LWS_CALLBACK_ESTABLISHED_CLIENT_HTTP:
+		resp_wsi = wsi;
 		r_status = (unsigned int)lws_http_client_http_response(wsi);
 
 		r_location[0] = '\0';
@@ -352,6 +372,8 @@ callback_cli(struct lws *wsi, enum lws_callback_reasons reason, void *user,
 
 	case LWS_CALLBACK_COMPLETED_CLIENT_HTTP:
 	case LWS_CALLBACK_CLOSED_CLIENT_HTTP:
+		if (reason == LWS_CALLBACK_CLOSED_CLIENT_HTTP && wsi == resp_wsi)
+			resp_wsi = NULL; /* nothing more will come from it */
 		if (!jdone)
 			jdone = 1;
 		if (jobs_active)
@@ -431,6 +453,9 @@ run_next_job(lws_sorted_usec_list_t *sul)
 		lwsl_user("%s: '%s': OK (status %u, %u bytes)\n", __func__,
 			  j->name, r_status, (unsigned int)r_body_len);
 
+		/* anything still to come from its response wsi is stale */
+		spent_wsi = resp_wsi;
+		resp_wsi = NULL;
 		jidx++;
 	}
 
@@ -1016,7 +1041,9 @@ static const struct job jobs_h3race[] = {
 	 * Outlive the server's idle close of anything it is still holding for
 	 * us -- that close is the POLLIN that used to land on a freed wsi.
 	 * The fixture's timeouts are a few seconds, this is comfortably past
-	 * them.
+	 * them.  On a heavily loaded box the new QUIC handshake can overrun
+	 * the h3 grace window, and the fetch legitimately completes over the
+	 * h2 TCP fallback instead.
 	 */
 	{ "h3 fetch after the server's idle close", NULL, "/files/small.txt",
 	  JS_QUIC, JC_NONE, JC_NONE, NULL, 200, SMALL_BODY, NULL, 16000 },
@@ -1123,6 +1150,8 @@ run_jobs(const struct job *j, int n, const char *alpn, int fresh)
 	njobs		= n;
 	jidx		= 0;
 	jdone		= 0;
+	resp_wsi	= NULL;
+	spent_wsi	= NULL;
 	job_delay_done	= -1;
 	jobs_active	= 1;
 	result		= 1;
