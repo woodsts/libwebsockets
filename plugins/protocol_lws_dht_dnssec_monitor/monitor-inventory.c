@@ -30,9 +30,8 @@
  * listed as further evidence about that interface.  Each address also
  * tracks the kinds of names that point at it, so an address that only
  * exists as NS glue can be told apart from one that is also used by host
- * records.  Dynamic-address records (${EXTIP4} / ${EXTIP6}, or the legacy
- * ${MHWC_DYNAMIC} / ${MHWC6_DYNAMIC}) resolve to the DHT-detected
- * addresses the UI passes with the request.
+ * records.  Dynamic-address records (${EXTIP4} / ${EXTIP6}) resolve to the
+ * DHT-detected addresses the UI passes with the request.
  */
 
 #if !defined(LWS_PLUGIN_STATIC)
@@ -840,32 +839,15 @@ inv_resolve_rdata(const char *rdata, int is_v6, const char *ip4,
 	int fam = is_v6 ? AF_INET6 : AF_INET;
 
 	/*
-	 * Two families of dynamic-address macro reach the zonefiles: the
-	 * ${EXTIP4} / ${EXTIP6} strexp substitutions the signer's subst
-	 * callback expands before parsing (the documented spelling, and
-	 * the one the zonefile editor previews), and the legacy bare
-	 * MHWC_DYNAMIC / MHWC6_DYNAMIC tokens the rdata encoder swaps in
-	 * itself, which zonefiles also wrap as ${...}.  The scanner sees
-	 * the raw zonefile, so accept every spelling
+	 * The signer's subst callback expands ${EXTIP4} / ${EXTIP6} before
+	 * parsing; the scanner sees the raw zonefile, so resolve them here
 	 */
-	static const char * const dyn[2][3] = {
-		{ "${EXTIP4}", "${MHWC_DYNAMIC}", "MHWC_DYNAMIC" },
-		{ "${EXTIP6}", "${MHWC6_DYNAMIC}", "MHWC6_DYNAMIC" },
-	};
-	size_t n;
-
-	for (n = 0; n < LWS_ARRAY_SIZE(dyn[0]); n++) {
-		if (strcmp(rdata, dyn[!!is_v6][n]))
-			continue;
-
+	if (!strcmp(rdata, is_v6 ? "${EXTIP6}" : "${EXTIP4}")) {
 		/*
 		 * subst is either empty or already canonical, see
-		 * handle_req_get_ip_inventory().  Unresolved, every
-		 * spelling groups as the canonical macro, so names using
-		 * different spellings still land on one interface
+		 * handle_req_get_ip_inventory()
 		 */
-		lws_strncpy(out, subst && subst[0] ? subst : dyn[!!is_v6][0],
-			    outlen);
+		lws_strncpy(out, subst && subst[0] ? subst : rdata, outlen);
 
 		return 1;
 	}

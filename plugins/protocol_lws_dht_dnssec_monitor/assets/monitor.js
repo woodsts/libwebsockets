@@ -830,9 +830,9 @@ function renderDomains(domains) {
 /*
  * The DHT-detected external addresses, as first-seen v4 / v6 literals,
  * with the configured IPv6 interface suffix applied.  These are the
- * values of the zonefiles' ${EXTIP4} / ${EXTIP6} macros (and the legacy
- * MHWC_DYNAMIC / MHWC6_DYNAMIC spelling): the zonefile editor previews
- * them, and the inventory grouping resolves dynamic records against them.
+ * values of the zonefiles' ${EXTIP4} / ${EXTIP6} macros: the zonefile
+ * editor previews them, the signer substitutes them, and the inventory
+ * grouping resolves dynamic records against them.
  */
 function currentExtIps() {
     const out = { ip4: '', ip6: '' };

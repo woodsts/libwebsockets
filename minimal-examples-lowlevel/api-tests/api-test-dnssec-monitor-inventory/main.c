@@ -16,9 +16,8 @@
  *    v4 and a v6 address proves they are addresses of the same
  *    interface, and all names pointing at any of those addresses are
  *    collected as evidence on that one interface
- *  - dynamic-address records (${EXTIP4} / ${EXTIP6}, and the legacy
- *    ${MHWC_DYNAMIC} / ${MHWC6_DYNAMIC} spelling mixed in the same zone)
- *    resolve to the DHT-detected addresses passed with the request
+ *  - dynamic-address records (${EXTIP4} / ${EXTIP6}) resolve to the
+ *    DHT-detected addresses passed with the request
  *  - an address shared by a nameserver name and a host name is marked
  *    ns without ns_only ("our infrastructure"), while an address only
  *    bound to an NS target is ns_only ("may not be our infrastructure")
@@ -429,8 +428,8 @@ static const char *z_example =
 	"mail IN A 192.0.2.9\n"
 	"@ IN A ${EXTIP4}\n"
 	"@ 600 IN AAAA ${EXTIP6}\n"
-	"dyn IN A ${MHWC_DYNAMIC}\n"
-	"dyn2	300	IN	A	${MHWC_DYNAMIC}\n"
+	"dyn IN A ${EXTIP4}\n"
+	"dyn2	300	IN	A	${EXTIP4}\n"
 	"lonely IN LOC 1 2 3 N 4 5 6 E 10m\n"
 	"@ IN TXT \"v=spf1 -all\"\n";
 
@@ -575,8 +574,7 @@ int main(void)
 	/*
 	 * Without detected addresses (the external IP determination has not
 	 * produced any yet), the dynamic records must still group the same
-	 * names into an interface, standing in on the macro text itself;
-	 * the legacy spelling folds onto the ${EXTIP4} / ${EXTIP6} one
+	 * names into an interface, standing in on the macro text itself
 	 */
 
 	if (t_fetch_hints(&vhd, NULL, NULL)) {
@@ -591,8 +589,7 @@ int main(void)
 	fails += t_expect(!!f, "dynamic v4 groups on the macro text");
 	if (f) {
 		fails += t_expect(f->nips == 2 &&
-				  t_find_ip(&ti, "${EXTIP6}") == f &&
-				  !t_find_ip(&ti, "${MHWC_DYNAMIC}"),
+				  t_find_ip(&ti, "${EXTIP6}") == f,
 				  "both macro families are one interface");
 		fails += t_expect(f->nnames == 3 &&
 				  !!t_find_name(f, "dyn.example.com.") &&
