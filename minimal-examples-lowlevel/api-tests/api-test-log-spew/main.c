@@ -7,10 +7,10 @@
  * Universal Public Domain Dedication.
  *
  * Confirms that a sustained spew of distinct log lines is not passed through
- * to the emit function, that the tail of it is replayed in order when the
+ * to the emit function, that a short tail of it is replayed in order when the
  * rate eases, that a stall in the middle of a spew is recognized for what it
- * was when the spew resumes, and that a surge smaller than the retention ring
- * is waved through without losing a line.
+ * was when the spew resumes, and that a surge short enough to end within the
+ * retained tail is waved through without losing a line.
  *
  * CI builders are overloaded as a matter of course, so we can be starved of
  * cpu at any point, for any length of time.  lws is expected to cope with that
@@ -31,16 +31,15 @@
 #define lws_usleep(x) usleep(x)
 #endif
 
-/*
- * Enough that after the stall, what lws retains of the rest of the spew in its
- * 16KiB ring is only the tail of it, even without timestamps, when a retained
- * line costs ~12 bytes
- */
-#define SPEW_LINES	5000
-#define SURGE_LINES	100
+#define SPEW_LINES	2000
 #define REC_MAX		(SPEW_LINES * 2)
 
+#define SPEW_ENTER_LINES	64	/* LWS_LOG_SPEW_TS_RING */
+#define SPEW_TAIL		10	/* LWS_LOG_SPEW_TAIL_LINES */
 #define SPEW_EXIT_MAX_MS	1000	/* LWS_LOG_SPEW_EXIT_MAX_US */
+
+/* trips spew mode, but ends within the retained tail */
+#define SURGE_LINES	(SPEW_ENTER_LINES - 1 + SPEW_TAIL - 3)
 
 /*
  * What the emit function saw, in order.  Test lines are recorded by their
@@ -51,7 +50,7 @@
 #define REC_ENTERED	-1	/* a: exit quiet ms */
 #define REC_RESUMED	-2	/* a: quiet ms that fooled it, b: exit quiet ms */
 #define REC_HEARTBEAT	-3
-#define REC_EASED	-4	/* a: quiet ms, b: lines not retained */
+#define REC_EASED	-4	/* a: quiet ms, b: not retained, c: replayed */
 #define REC_END_REPLAY	-5
 #define REC_FINAL	-6
 #define REC_OTHER	-7
@@ -60,6 +59,7 @@ typedef struct {
 	int		v;
 	int		a;
 	int		b;
+	int		c;
 } rec_t;
 
 static rec_t rec[REC_MAX];
@@ -108,7 +108,7 @@ static void
 test_emit(int level, const char *line)
 {
 	const char *q;
-	rec_t r = { REC_OTHER, 0, 0 };
+	rec_t r = { REC_OTHER, 0, 0, 0 };
 
 	(void)level;
 
@@ -119,6 +119,7 @@ test_emit(int level, const char *line)
 		r.a = num_after(line, "eased: ");
 		q = strstr(line, " over ");
 		r.b = q ? num_after(q, "ms, ") : -1;
+		r.c = num_after(line, "retained, last ");
 		in_spew = 0;
 	} else if (strstr(line, "lws: log spew: resumed after ")) {
 		r.v = REC_RESUMED;
@@ -231,7 +232,7 @@ static int
 check_decisions(const char *hint)
 {
 	int e = 0, want;
-	unsigned int n;
+	unsigned int n, m;
 
 	for (n = 0; n < rec_count; n++) {
 		switch (rec[n].v) {
@@ -247,6 +248,18 @@ check_decisions(const char *hint)
 				e++;
 			}
 			last_quiet = rec[n].a;
+
+			/* it replays what it says it does, only a short tail */
+
+			for (m = n + 1; m < rec_count &&
+					rec[m].v != REC_END_REPLAY; m++)
+				;
+			if (m == rec_count || rec[n].c > SPEW_TAIL ||
+			    (int)(m - n - 1) != rec[n].c) {
+				fail("%s: replayed %u lines, said %d", hint,
+				     m - n - 1, rec[n].c);
+				e++;
+			}
 			break;
 
 		case REC_RESUMED:
@@ -409,7 +422,7 @@ main(int argc, const char **argv)
 	rec_overflow = 0;
 
 	/*
-	 * 3: a surge that trips spew mode but fits in the retention ring is
+	 * 3: a surge that trips spew mode but ends within the retained tail is
 	 *    not allowed to lose a line: everything comes out exactly once
 	 *    and in order, some of it directly and the rest by replay
 	 */

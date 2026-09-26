@@ -350,9 +350,11 @@ those 64 lines span less than 20ms, ie, the sustained rate has exceeded about
 
  - one line is emitted saying so,
 
- - subsequent lines are formatted as usual but diverted into a 16KB heap
+ - subsequent lines are formatted as usual but diverted into a small heap
    ringbuffer allocated for the purpose, instead of being emitted; the ring
-   retains only the most recent lines of the spew,
+   retains only the last 10 lines of the spew, fewer if they are long, which
+   is enough to see how it ended: the spew itself is the problem, and this
+   also runs on devices with little heap,
 
  - once a second, one line is emitted saying the spew is still going and how
    many lines have been swallowed so far.
@@ -381,14 +383,13 @@ whenever that comes, or by `lws_context_destroy()`.  If the process dies during
 a spew, the retained tail dies with it.
 
 A legitimate surge of logs, eg, context creation at debug level, may be fast
-enough to trip entry.  That costs nothing: as long as the surge totals less
-than the ringbuffer size, every line is retained and replayed intact when the
-surge ends.  The ringbuffer size is effectively the size of surge that is
-waved through losslessly; the entry rate only decides when lws starts paying
-attention.
+enough to trip entry.  Its first 63 lines were emitted before lws entered spew
+mode, and if it ends within the tail that is retained, that is replayed intact,
+so a surge of up to about 73 lines is waved through losslessly.  A longer one
+loses its middle, as a spew does.
 
 The tunables are compile-time, and can be overridden on the compiler command
-line, eg, `-DLWS_LOG_SPEW_RING_SIZE=65536`:
+line, eg, `-DLWS_LOG_SPEW_TAIL_LINES=20`:
 
 |Define|Default|Meaning|
 |---|---|---|
@@ -398,7 +399,8 @@ line, eg, `-DLWS_LOG_SPEW_RING_SIZE=65536`:
 |`LWS_LOG_SPEW_EXIT_US`|5000|leave spew mode if they span more than this|
 |`LWS_LOG_SPEW_EXIT_MAX_US`|1000000|limit of how far that grows after resuming|
 |`LWS_LOG_SPEW_RESUME_US`|1000000|re-entering this soon after leaving is a resume|
-|`LWS_LOG_SPEW_RING_SIZE`|16384 (2048 on FreeRTOS)|bytes of spew retained|
+|`LWS_LOG_SPEW_TAIL_LINES`|10|lines of spew retained|
+|`LWS_LOG_SPEW_RING_SIZE`|2048 (1024 on FreeRTOS)|bytes of spew retained|
 |`LWS_LOG_SPEW_HEARTBEAT_US`|1000000|interval of the still-going line|
 
 A log context with `LLLF_LOG_SPEW_OFF` in its `lll_flags` is exempt from spew

@@ -442,10 +442,12 @@ static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
  * lines that got as far as emission.  When the whole ring spans less than
  * LWS_LOG_SPEW_ENTER_US, ie, the sustained rate has exceeded
  * LWS_LOG_SPEW_TS_RING / LWS_LOG_SPEW_ENTER_US, we enter spew mode: we
- * allocate a heap ringbuffer of LWS_LOG_SPEW_RING_SIZE bytes and divert the
- * formatted lines into that instead of emitting them, so we retain the most
- * recent tail of the spew and nothing else.  A heartbeat line goes out once
- * a second so the log shows the process is alive and how much was swallowed.
+ * allocate a small heap ringbuffer of LWS_LOG_SPEW_RING_SIZE bytes and divert
+ * the formatted lines into that instead of emitting them.  It retains only
+ * the last LWS_LOG_SPEW_TAIL_LINES lines, fewer if they are long: enough to
+ * see how the spew ended, since the spew itself is the problem, and this also
+ * runs on devices with little heap.  A heartbeat line goes out once a second
+ * so the log shows the process is alive and how much was swallowed.
  *
  * Leaving spew mode is decided over a much shorter window than entering it,
  * since a spew typically never pauses at all: once the last
@@ -466,11 +468,10 @@ static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
  * spew starts afresh, the exit quiet halves back towards LWS_LOG_SPEW_EXIT_US.
  *
  * A legitimate surge of logs, eg, context creation at debug level, may be
- * fast enough to trip entry.  That costs nothing: as long as the surge
- * totals less than LWS_LOG_SPEW_RING_SIZE bytes, every line is retained and
- * replayed intact when the surge ends.  The ring size is effectively the
- * size of surge we wave through losslessly; the entry rate only decides when
- * we start paying attention.
+ * fast enough to trip entry.  The first LWS_LOG_SPEW_TS_RING - 1 lines of it
+ * were emitted before we entered spew mode, and if it ends within the tail we
+ * retain, it is replayed intact, so a surge of up to that many lines is
+ * waved through losslessly.  A longer one loses its middle, as a spew does.
  *
  * The exit check can only run when a log arrives.  If a spew stops dead and
  * nothing logs afterwards, the retained tail is replayed by the next log
@@ -500,11 +501,14 @@ static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 #if !defined(LWS_LOG_SPEW_RESUME_US)
 #define LWS_LOG_SPEW_RESUME_US		1000000
 #endif
+#if !defined(LWS_LOG_SPEW_TAIL_LINES)
+#define LWS_LOG_SPEW_TAIL_LINES		10
+#endif
 #if !defined(LWS_LOG_SPEW_RING_SIZE)
 #if defined(LWS_PLAT_FREERTOS) || defined(LWS_PLAT_BAREMETAL)
-#define LWS_LOG_SPEW_RING_SIZE		2048
+#define LWS_LOG_SPEW_RING_SIZE		1024
 #else
-#define LWS_LOG_SPEW_RING_SIZE		16384
+#define LWS_LOG_SPEW_RING_SIZE		2048
 #endif
 #endif
 #if !defined(LWS_LOG_SPEW_HEARTBEAT_US)
@@ -519,6 +523,7 @@ typedef struct lws_log_spew_ring {
 	size_t		head;		/* next byte to write */
 	size_t		tail;		/* oldest byte retained */
 	size_t		used;
+	unsigned int	lines;		/* retained */
 	lws_usec_t	entered;
 	lws_usec_t	exit_us;	/* quiet needed to call this spew over */
 	lws_usec_t	quiet;		/* the quiet that called it over */
@@ -594,12 +599,13 @@ spew_ring_pop(lws_log_spew_ring_t *r, char *line, size_t max, int *level)
 	uint8_t hdr[SPEW_HDR];
 	size_t len;
 
-	if (!r->used)
+	if (!r->lines)
 		return 0;
 
 	spew_ring_read(r, hdr, SPEW_HDR);
 	len = (size_t)hdr[0] | ((size_t)hdr[1] << 8);
 	*level = hdr[2] | (hdr[3] << 8);
+	r->lines--;
 
 	if (!line) {
 		/* discard it */
@@ -628,7 +634,8 @@ spew_ring_push(lws_log_spew_ring_t *r, int level, const char *line, size_t len)
 
 	/* make room by forgetting the oldest lines */
 
-	while (LWS_LOG_SPEW_RING_SIZE - r->used < len + SPEW_HDR) {
+	while (r->lines >= LWS_LOG_SPEW_TAIL_LINES ||
+	       LWS_LOG_SPEW_RING_SIZE - r->used < len + SPEW_HDR) {
 		spew_ring_pop(r, NULL, 0, &lv);
 		r->lost++;
 	}
@@ -639,6 +646,7 @@ spew_ring_push(lws_log_spew_ring_t *r, int level, const char *line, size_t len)
 	hdr[3] = (uint8_t)((level >> 8) & 0xff);
 	spew_ring_write(r, hdr, SPEW_HDR);
 	spew_ring_write(r, (const uint8_t *)line, len);
+	r->lines++;
 	r->swallowed++;
 }
 
@@ -802,11 +810,12 @@ spew_replay(lws_log_cx_t *cx, int level, lws_log_spew_ring_t *r,
 		  (unsigned int)(r->quiet / 1000),
 		  (unsigned int)r->swallowed,
 		  (unsigned int)((now - r->entered) / 1000),
-		  (unsigned int)r->lost,
-		  (unsigned int)(r->swallowed - r->lost));
+		  (unsigned int)r->lost, r->lines);
 
-	while ((len = spew_ring_pop(r, line, sizeof(line), &lv)))
+	while (r->lines) {
+		len = spew_ring_pop(r, line, sizeof(line), &lv);
 		log_emit(cx, lv, line, len);
+	}
 
 	spew_emit(cx, level, "lws: log spew: end of replay");
 
@@ -980,10 +989,10 @@ __lws_logv(lws_log_cx_t *cx, lws_log_prepend_cx_t prep, void *obj,
 	switch (act) {
 	case SPEW_ENTERED:
 		spew_emit(cx, filter, "lws: log spew: %u logs in %ums, retaining"
-				      " the last %u bytes of it until %u logs"
+				      " the last %u of it until %u logs"
 				      " span over %ums",
 			  LWS_LOG_SPEW_TS_RING, LWS_LOG_SPEW_ENTER_US / 1000,
-			  LWS_LOG_SPEW_RING_SIZE, LWS_LOG_SPEW_EXIT_SAMPLES,
+			  LWS_LOG_SPEW_TAIL_LINES, LWS_LOG_SPEW_EXIT_SAMPLES,
 			  (unsigned int)(replay.exit_us / 1000));
 		return;
 
