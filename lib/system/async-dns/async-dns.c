@@ -1563,6 +1563,10 @@ lws_async_dns_deinit(lws_async_dns_t *dns)
 	lws_dll2_foreach_safe(&dns->waiting, NULL, clean);
 	lws_dll2_foreach_safe(&dns->nameservers, NULL, ns_clean);
 	lws_dll2_foreach_safe(&dns->cached, NULL, cache_clean);
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+	/* after the queries: a zone being authenticated has one in flight */
+	lws_adns_dnssec_deinit(dns);
+#endif
 }
 
 static int
@@ -2347,6 +2351,20 @@ lws_async_dns_dnssec_set_mode(struct lws_context *context,
 {
 	context->async_dns.dnssec_mode = (uint8_t)mode;
 }
+
+#if !defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+int
+lws_async_dns_dnssec_set_root_anchors(struct lws_context *context,
+				      const lws_adns_ds_anchor_t *anchors,
+				      size_t count)
+{
+	(void)context;
+	(void)anchors;
+	(void)count;
+
+	return 1; /* there is no DNSSEC validation in this build */
+}
+#endif
 
 const uint8_t *
 lws_async_dns_get_rr_cache(struct lws_context *context, const char *name,

@@ -360,6 +360,18 @@ typedef struct lws_async_dns {
 	uint8_t			watch_started:1;
 
 	uint8_t			dnssec_mode; /* lws_async_dns_dnssec_mode_t */
+
+#if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
+	/*
+	 * Zones whose DNSKEY RRset we authenticated down a chain of DS from
+	 * the root trust anchors, or are in the middle of authenticating
+	 * (see dnssec.c)
+	 */
+	lws_dll2_owner_t	dnssec_zones;
+	/* root trust anchors as DS RDATA records, NULL = the built-in ones */
+	uint8_t			*dnssec_anchors;
+	size_t			dnssec_anchors_len;
+#endif
 } lws_async_dns_t;
 
 #define lws_async_dns_from_server(_s) ((lws_async_dns_t *)lws_dll2_owner(&_s->list))

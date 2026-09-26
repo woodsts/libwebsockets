@@ -260,4 +260,37 @@ lws_async_dns_server_reload(struct lws_context *context);
 LWS_VISIBLE LWS_EXTERN void
 lws_async_dns_dnssec_set_mode(struct lws_context *context, lws_async_dns_dnssec_mode_t mode);
 
+/*
+ * A DS record for the root zone's key signing key, ie, a DNSSEC trust anchor
+ */
+typedef struct lws_adns_ds_anchor {
+	const uint8_t		*digest;
+	size_t			digest_len;
+	uint16_t		key_tag;
+	uint8_t			algorithm;	/* eg, 8 = RSASHA256 */
+	uint8_t			digest_type;	/* 2 = SHA-256, 4 = SHA-384 */
+} lws_adns_ds_anchor_t;
+
+/**
+ * lws_async_dns_dnssec_set_root_anchors() - replace the DNSSEC trust anchors
+ *
+ * \param context: the lws_context
+ * \param anchors: array of DS records for the root zone's KSK(s), or NULL
+ * \param count: number of entries in \p anchors, or 0
+ *
+ * DNSSEC validation authenticates every zone's keys by a chain of DS records
+ * leading up to a key of the root zone that matches one of these anchors.
+ * Lws has the ICANN root KSK DS records built in; this replaces them, eg,
+ * for a private DNS hierarchy or a test.  NULL / 0 restores the built-in set.
+ *
+ * Keys already authenticated under the previous anchors are forgotten.
+ *
+ * Returns 0 on success, or nonzero if an anchor is malformed or OOM, in which
+ * case the previous anchors are kept.
+ */
+LWS_VISIBLE LWS_EXTERN int
+lws_async_dns_dnssec_set_root_anchors(struct lws_context *context,
+				      const lws_adns_ds_anchor_t *anchors,
+				      size_t count);
+
 #endif

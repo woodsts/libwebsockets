@@ -116,6 +116,46 @@ lws_async_dns_dnssec_set_mode(context, LWS_ADNS_DNSSEC_REQUIRE);
 
 When validation is set to `LWS_ADNS_DNSSEC_REQUIRE`, queries failing to authenticate computationally with upstream Trust Anchors (or those lacking RRSIG/DNSKEY records entirely) will be explicitly rejected by the resolver and not propagate to callbacks or connections. But some domains inherently lack DNSSEC. For situations where strict DNSSEC is globally mandated, but a small handful of known-unsigned destinations must be reached, clients can explicitly set the `LWS_ADNS_INDICATE_LACKS_DNSSEC` bitflag natively on integer `qtype` lookups. This allows the resolver to tolerate missing records explicitly for that singular lookup, while strictly required globally.
 
+Independent of the context mode, a single lookup can be made to validate by
+ORing `LWS_ADNS_WANT_DNSSEC` into its `qtype`.  Only a lookup that validated
+reports `LWS_ADNS_DNSSEC_VALID` in the callback's `n`, including when a later
+lookup is served the same records from the cache; a lookup that has to validate
+is never served records that were cached by one that didn't.
+
+### Chain of trust
+
+An answer's RRSIG is only checked with a key of the signer's zone once that
+zone's keys are themselves authenticated, the same way a validating recursive
+resolver does it:
+
+ - the zone's DS RRset is fetched, and must be signed by an authenticated key
+   of the zone that signed it (its parent), which is authenticated the same way
+   in turn, up to the root
+ - the zone's DNSKEY RRset is fetched, and must be signed by a key in it that
+   one of those DS records vouches for; for the root, one of the trust anchors
+
+The chain is walked once per zone, and the authenticated keys are kept until
+the earlier of their signatures' expiry and their TTL, so later lookups signed
+by the same zones only cost the RRSIG check.  A zone that fails to authenticate
+is also remembered for 10s, so a broken chain is not walked again for every
+lookup that needs it.
+
+Delegations to unsigned zones are not proven with NSEC / NSEC3: anything under
+a zone without DS records fails to validate.  The supported algorithms are
+RSASHA256, RSASHA512, ECDSAP256SHA256 and ECDSAP384SHA384, with DS digests of
+SHA-256 or SHA-384.
+
+The ICANN root KSK DS records are built in as the trust anchors.  They can be
+replaced, eg, for a private DNS hierarchy, with
+
+```c
+lws_async_dns_dnssec_set_root_anchors(context, anchors, count);
+```
+
+which also forgets any keys authenticated under the previous anchors;
+`minimal-examples-lowlevel/api-tests/api-test-dnssec-chain` does this to test
+the validator against a signed hierarchy of its own.
+
 ## Network configuration changes and failover
 
 Since lws async DNS natively talks to the DNS servers over UDP, it doesn't automatically adapt when the OS routing table or network configuration changes (e.g., when a laptop is unplugged from ethernet and moves to wlan, losing access to the previous local DNS server).

@@ -177,18 +177,14 @@ typedef struct lws_adns_q {
 	uint8_t			completing:1; /* in lws_async_dns_complete() */
 #if defined(LWS_WITH_SYS_ASYNC_DNS_DNSSEC)
 	/*
-	 * A pending RRSIG validation is a second, DNSKEY query with the
-	 * validation context as its opaque.  Both queries point at that
-	 * context so that whichever of them is destroyed first can detach
-	 * it: the requester dying leaves the sub-lookup's callback with no
-	 * query to complete, and the sub-lookup dying without its callback
-	 * (context destroy) would otherwise leak the context.
+	 * A pending RRSIG validation is a validation context waiting on the
+	 * signer's zone to finish being authenticated.  The query owns the
+	 * context, and destroying the query unhooks it from the zone.
 	 *
 	 * An address lookup is a pair of responses (A and AAAA) that each
 	 * carry their own RRSIG over their own RRset, so there is one
 	 * validation, and one context, per response.
 	 */
-	struct lws_dnssec_val_ctx *dnssec_vctx_owned;   /* we are the DNSKEY sub-lookup */
 	struct lws_dnssec_val_ctx *dnssec_vctx_waiting[2]; /* our RRSIGs being validated */
 
 	/*
@@ -284,6 +280,10 @@ __lws_async_dns_server_remove(lws_async_dns_t *dns, const lws_sockaddr46 *sa46);
 int
 lws_adns_dnssec_verify(lws_adns_q_t *q, const uint8_t *pkt, size_t len,
 		       uint8_t resp);
+
+/* destroy the authenticated zone store and the trust anchors */
+void
+lws_adns_dnssec_deinit(lws_async_dns_t *dns);
 #endif
 
 int
