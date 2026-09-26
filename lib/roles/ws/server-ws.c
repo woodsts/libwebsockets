@@ -53,7 +53,13 @@ lws_extension_server_handshake(struct lws *wsi, char **p, int budget)
 	 * and go through them
 	 */
 
-	if (lws_hdr_copy(wsi, (char *)pt->serv_buf, (int)context->pt_serv_buf_size,
+	/*
+	 * The copy lands at the start of serv_buf, below the 101 response
+	 * head that handshake_0405() has already composed at +400; the scan
+	 * below refuses a list longer than 255 anyway, so bound the copy to
+	 * that rather than let a long list overwrite the response
+	 */
+	if (lws_hdr_copy(wsi, (char *)pt->serv_buf, 256,
 			 WSI_TOKEN_EXTENSIONS) < 0)
 		return 1;
 
