@@ -1158,7 +1158,7 @@ ds_test_done:
 						buf[st.st_size] = '\0';
 						struct auth_dns_zone z;
 						memset(&z, 0, sizeof(z));
-						if (!lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, &z, NULL, NULL)) {
+						if (!lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, &z)) {
 							if (z.default_ttl[0]) default_ttl = (time_t)atoi(z.default_ttl);
 							lws_start_foreach_dll(struct lws_dll2 *, d, lws_dll2_get_head(&z.rrset_list)) {
 								struct auth_dns_rrset *rs = lws_container_of(d, struct auth_dns_rrset, list);

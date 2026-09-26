@@ -477,8 +477,7 @@ inv_scan_zone(struct inv_stmts *s, const char *domains_path,
 
 	memset(&zone, 0, sizeof(zone));
 
-	if (lws_auth_dns_parse_zone_buf((const char *)buf, (size_t)n, &zone,
-					NULL, NULL)) {
+	if (lws_auth_dns_parse_zone_buf((const char *)buf, (size_t)n, &zone)) {
 		/*
 		 * An unparseable zone still gets its stamp, so it is not
 		 * rescanned on every request until it is fixed

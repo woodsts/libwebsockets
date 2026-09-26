@@ -102,8 +102,7 @@ load_zone(struct auth_dns_zone *z, const char *path)
 
 	if (read(fd, buf, (size_t)st.st_size) == st.st_size) {
 		buf[st.st_size] = '\0';
-		r = lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, z,
-						NULL, NULL);
+		r = lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, z);
 	}
 
 	free(buf);
@@ -370,7 +369,7 @@ int main(int argc, const char **argv)
 	info.ksk_jwk_filepath	= "./ksk.jwk";
 	info.zsk_jwk_filepath	= "./zsk.jwk";
 
-	const char *sn[] = { "MHWC_DYNAMIC" };
+	const char *sn[] = { "EXTIP4" };
 	const char *sv[] = { "127.0.0.1" };
 	info.subst_names = sn;
 	info.subst_values = sv;

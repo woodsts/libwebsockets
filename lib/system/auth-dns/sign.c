@@ -252,7 +252,7 @@ loc_put_u32(uint8_t *w, uint32_t v)
 
 
 int
-lws_auth_dns_rdata_to_wire(struct auth_dns_zone *z, struct auth_dns_rr *rr, uint16_t type, const char *ipv4, const char *ipv6)
+lws_auth_dns_rdata_to_wire(struct auth_dns_zone *z, struct auth_dns_rr *rr, uint16_t type)
 {
 	struct auth_dns_rdata_scratch *sc;
 	char (*toks)[1024];
@@ -335,9 +335,7 @@ lws_auth_dns_rdata_to_wire(struct auth_dns_zone *z, struct auth_dns_rr *rr, uint
 	if (type == 1 && num_toks >= 1) { // A
 		struct sockaddr_in sin;
 		memset(&sin, 0, sizeof(sin));
-		const char *tgt = toks[0];
-		if (!strcmp(tgt, "MHWC_DYNAMIC") && ipv4 && ipv4[0]) tgt = ipv4;
-		if (inet_pton(AF_INET, tgt, &sin.sin_addr) != 1)
+		if (inet_pton(AF_INET, toks[0], &sin.sin_addr) != 1)
 			goto fail;
 		WCHK(4);
 		memcpy(w, &sin.sin_addr, 4);
@@ -345,9 +343,7 @@ lws_auth_dns_rdata_to_wire(struct auth_dns_zone *z, struct auth_dns_rr *rr, uint
 	} else if (type == 28 && num_toks >= 1) { // AAAA
 		struct sockaddr_in6 sin6;
 		memset(&sin6, 0, sizeof(sin6));
-		const char *tgt = toks[0];
-		if (!strcmp(tgt, "MHWC6_DYNAMIC") && ipv6 && ipv6[0]) tgt = ipv6;
-		if (inet_pton(AF_INET6, tgt, &sin6.sin6_addr) != 1)
+		if (inet_pton(AF_INET6, toks[0], &sin6.sin6_addr) != 1)
 			goto fail;
 		WCHK(16);
 		memcpy(w, &sin6.sin6_addr, 16);
@@ -1386,7 +1382,7 @@ lws_auth_dns_add_nsec3(struct auth_dns_zone *z, const char *salt_hex, int iterat
 				lws_snprintf(tb, sizeof(tb), "1 0 %d %s %s %s", iterations, salt_hex ? salt_hex : "-", nodes[next_idx]->b32, nodes[i]->type_list);
 				rr->rdata = lws_strdup(tb);
 				rr->rdata_len = strlen(rr->rdata);
-				lws_auth_dns_rdata_to_wire(z, rr, rrset->type, NULL, NULL);
+				lws_auth_dns_rdata_to_wire(z, rr, rrset->type);
 				lws_dll2_add_tail(&rr->list, &rrset->rr_list);
 			}
 		}
@@ -1416,7 +1412,7 @@ lws_auth_dns_add_nsec3(struct auth_dns_zone *z, const char *salt_hex, int iterat
 			lws_snprintf(tb, sizeof(tb), "1 0 %d %s", iterations, salt_hex ? salt_hex : "-");
 			rr->rdata = lws_strdup(tb);
 			rr->rdata_len = strlen(rr->rdata);
-			lws_auth_dns_rdata_to_wire(z, rr, rrset->type, NULL, NULL);
+			lws_auth_dns_rdata_to_wire(z, rr, rrset->type);
 			lws_dll2_add_tail(&rr->list, &rrset->rr_list);
 		}
 	}
@@ -1915,7 +1911,7 @@ lws_auth_dns_verify_zone(struct lws_auth_dns_sign_info *info)
 	buf[st.st_size] = '\0';
 	memset(&zone, 0, sizeof(zone));
 
-	if (lws_auth_dns_parse_zone_buf(buf, (size_t)n, &zone, NULL, NULL)) {
+	if (lws_auth_dns_parse_zone_buf(buf, (size_t)n, &zone)) {
 		lwsl_err("Verify failed to parse zone\n");
 		lws_free(buf);
 		return 1;

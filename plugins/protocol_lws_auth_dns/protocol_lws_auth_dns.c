@@ -867,7 +867,7 @@ auth_dns_dir_cb(const char *dirpath, void *user, struct lws_dir_entry *lde)
 		return 0;
 	}
 
-	if (lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, &ce->zone, NULL, NULL)) {
+	if (lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, &ce->zone)) {
 		lwsl_notice("parse failed\n");
 		free(ce);
 		free(buf);
@@ -926,7 +926,7 @@ auth_dns_local_zone_cb(void *opaque, const char *domain, const char *payload_pat
 				time_t sig_expiry = 0;
 				time_t default_ttl = 3600;
 
-				if (!lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, &z, NULL, NULL)) {
+				if (!lws_auth_dns_parse_zone_buf(buf, (size_t)st.st_size, &z)) {
 					if (z.default_ttl[0]) default_ttl = (time_t)atoi(z.default_ttl);
 
 					lws_start_foreach_dll(struct lws_dll2 *, d, lws_dll2_get_head(&z.rrset_list)) {
