@@ -779,7 +779,7 @@ log_emit(lws_log_cx_t *cx, int level, const char *line, size_t len)
 
 /* emit a line of our own about the spew, in the style of the cx */
 
-static void
+static void LWS_FORMAT(3)
 spew_emit(lws_log_cx_t *cx, int level, const char *format, ...)
 {
 	char b[160], *p = b, *end = b + sizeof(b) - 2;
