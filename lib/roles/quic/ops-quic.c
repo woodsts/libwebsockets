@@ -2840,16 +2840,18 @@ lws_quic_packet_tx(struct lws *wsi, uint8_t *buf, size_t max,
                                 p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->stream_id);
 				p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->offset); /* app_err_code */
 				p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->limit); /* final_size */
-			} else if (type == LWS_QUIC_FT_STOP_SENDING) {
+			} else if (type == LWS_QUIC_FT_STOP_SENDING ||
+				   type == LWS_QUIC_FT_NEW_CONNECTION_ID) {
+				/*
+				 * STOP_SENDING: stream_id, app_err_code
+				 * NEW_CONNECTION_ID: seq, retire_prior_to, then
+				 * the cid + token ride in data
+				 */
                                 p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->stream_id);
-				p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->offset); /* app_err_code */
+				p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->offset);
 			} else if (type == LWS_QUIC_FT_MAX_STREAMS_BIDI || type == LWS_QUIC_FT_MAX_STREAMS_UNIDI ||
 				   type == LWS_QUIC_FT_STREAMS_BLOCKED_BIDI || type == LWS_QUIC_FT_STREAMS_BLOCKED_UNIDI) {
 				p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->limit);
-			} else if (type == LWS_QUIC_FT_NEW_CONNECTION_ID) {
-                                p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->stream_id); /* seq */
-				p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->offset); /* retire_prior_to */
-				/* cid + token in data */
 			} else if (type == LWS_QUIC_FT_RETIRE_CONNECTION_ID) {
                                 p += lws_quic_write_varint(p, max - (size_t)(p - buf), f->stream_id); /* seq */
 			}
