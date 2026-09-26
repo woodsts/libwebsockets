@@ -405,8 +405,8 @@ lejp_parse(struct lejp_ctx *ctx, const unsigned char *json, int len)
 					goto reject;
 				}
 				ctx->i[ctx->ipos++] = 0;
-				if (ctx->flags & LEJP_FLAG_FEAT_LEADING_WC)
-					lejp_check_path_match(ctx);
+				/* the first element matches like the later ones */
+				lejp_check_path_match(ctx);
 				goto add_stack_level;
 			}
 			if (c != '{') {
@@ -710,8 +710,13 @@ lejp_parse(struct lejp_ctx *ctx, const unsigned char *json, int len)
 					lejp_check_path_match(ctx);
 				if (ctx->pst[ctx->pst_sp].callback(ctx, LEJPCB_ARRAY_START))
 					goto reject_callback;
-				if (ctx->flags & LEJP_FLAG_FEAT_LEADING_WC)
-					lejp_check_path_match(ctx);
+				/*
+				 * The first element's path is now x[], just as
+				 * every later element's is after its ','; match
+				 * it the same way, rather than let it inherit
+				 * whatever x itself matched
+				 */
+				lejp_check_path_match(ctx);
 				if (ctx->ipos >= (int)LWS_ARRAY_SIZE(ctx->i)) {
 					ret = LEJP_REJECT_MP_DELIM_ISTACK;
 					goto reject;
