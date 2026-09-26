@@ -1,0 +1,235 @@
+/*
+ * lws-api-test-dnssec-monitor-extip
+ *
+ * Written in 2026 by Andy Green <andy@warmcat.com>
+ * Note: CC0 1.0 Universal Public Domain Dedication
+ *
+ * Exercises the dnssec-monitor plugin's handling of the DHT-detected
+ * external addresses on the zone signing side (monitor-extip.c):
+ *
+ *  - the proxy -> root control channel reassembles ext-ips lines across
+ *    reads, takes only literal addresses of the right family, rejects
+ *    malformed JSON, resyncs after an overlong line, and only counts a
+ *    new generation when the addresses really changed
+ *  - the IPv6 suffix replaces the low 16 bits of the detected address,
+ *    and a malformed suffix leaves the address alone
+ *  - zonefiles are classified by the ${EXTIP4} / ${EXTIP6} macros they use
+ *  - the per-zone record of the addresses a zone was signed with matches
+ *    only the same values, so an address or suffix change re-signs it
+ */
+
+#include <libwebsockets.h>
+
+#include <string.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <errno.h>
+
+#include "private.h"
+
+static int
+t_expect(int cond, const char *what)
+{
+	if (!cond) {
+		lwsl_err("%s: FAILED: %s\n", __func__, what);
+
+		return 1;
+	}
+
+	return 0;
+}
+
+static int
+t_write_file(const char *path, const char *content)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	size_t l = strlen(content);
+
+	if (fd < 0)
+		return 1;
+	if (write(fd, content, l) != (ssize_t)l) {
+		close(fd);
+
+		return 1;
+	}
+	close(fd);
+
+	return 0;
+}
+
+static int
+t_mkdir(const char *path)
+{
+	if (mkdir(path, 0700) && errno != EEXIST)
+		return 1;
+
+	return 0;
+}
+
+static void
+t_ctl(struct vhd *vhd, const char *s)
+{
+	monitor_extip_ctl_rx(vhd, s, strlen(s));
+}
+
+static int
+t_suffix(const char *ip6, const char *suffix, const char *expect)
+{
+	char out[64];
+
+	monitor_extip_apply_suffix(out, sizeof(out), ip6, suffix);
+	if (strcmp(out, expect)) {
+		lwsl_err("%s: '%s' + '%s' -> '%s', expected '%s'\n", __func__,
+			 ip6, suffix, out, expect);
+
+		return 1;
+	}
+
+	return 0;
+}
+
+int main(void)
+{
+	struct vhd vhd;
+	char ip4[64], ip6[64], big[1024];
+	unsigned int gen;
+	int fails = 0;
+
+	lws_set_log_level(LLL_USER | LLL_ERR | LLL_WARN | LLL_NOTICE, NULL);
+	lwsl_user("LWS API selftest: dnssec-monitor external addresses\n");
+
+	memset(&vhd, 0, sizeof(vhd));
+	vhd.base_dir = (char *)"./extip-corpus";
+
+	lws_dir("./extip-corpus", NULL, lws_dir_rm_rf_cb);
+	rmdir("./extip-corpus");
+
+	if (t_mkdir("./extip-corpus") ||
+	    t_mkdir("./extip-corpus/domains") ||
+	    t_write_file("./extip-corpus/both.zone",
+			 "@ IN A ${EXTIP4}\n"
+			 "@ IN AAAA ${EXTIP6}\n"
+			 "www IN A 192.0.2.1\n") ||
+	    t_write_file("./extip-corpus/v6.zone",
+			 "mx 60 IN AAAA ${EXTIP6}\n") ||
+	    t_write_file("./extip-corpus/static.zone",
+			 "@ IN A 192.0.2.1\n"
+			 "; ${EXTIP} is not one of ours\n")) {
+		lwsl_err("%s: unable to create the corpus\n", __func__);
+
+		return 1;
+	}
+
+	/* control channel: a line split over reads only lands when complete */
+
+	t_ctl(&vhd, "{\"ext-ips\": [\"203.0.113.");
+	fails += t_expect(!vhd.extip_gen && !vhd.extip4[0],
+			  "partial line not acted on");
+	t_ctl(&vhd, "7\", \"2001:db8:ffff:0:0:0:0:1\"]}\n");
+	fails += t_expect(vhd.extip_gen == 1 &&
+			  !strcmp(vhd.extip4, "203.0.113.7") &&
+			  !strcmp(vhd.extip6, "2001:db8:ffff::1") &&
+			  vhd.extip_since,
+			  "reassembled line sets canonical addresses");
+
+	gen = vhd.extip_gen;
+	t_ctl(&vhd, "{\"ext-ips\": [\"203.0.113.7\", \"2001:db8:ffff::1\"]}\n");
+	fails += t_expect(vhd.extip_gen == gen, "unchanged addresses no new gen");
+
+	/* non-address strings and a second address per family are ignored */
+	t_ctl(&vhd, "{\"ext-ips\": [\"x\\\"y\", \"198.51.100.2\", "
+		    "\"198.51.100.3\"]}\n");
+	fails += t_expect(vhd.extip_gen == gen + 1 &&
+			  !strcmp(vhd.extip4, "198.51.100.2") &&
+			  !vhd.extip6[0],
+			  "only the first literal per family, v6 now absent");
+
+	gen = vhd.extip_gen;
+	t_ctl(&vhd, "{\"ext-ips\": [\"192.0.2.99\"\n");
+	fails += t_expect(vhd.extip_gen == gen &&
+			  !strcmp(vhd.extip4, "198.51.100.2"),
+			  "malformed line rejected");
+
+	/* an overlong line is dropped whole, and the next line still works */
+	memset(big, 'a', sizeof(big) - 1);
+	big[sizeof(big) - 1] = '\0';
+	t_ctl(&vhd, big);
+	t_ctl(&vhd, "\"]}\n{\"ext-ips\": [\"203.0.113.7\", \"2001:db8:ffff::1\"]}\n");
+	fails += t_expect(vhd.extip_gen == gen + 1 &&
+			  !strcmp(vhd.extip4, "203.0.113.7") &&
+			  !strcmp(vhd.extip6, "2001:db8:ffff::1"),
+			  "resync after overlong line");
+
+	/* suffix: one hex group replacing the low 16 bits */
+
+	fails += t_suffix("2001:db8:ffff::1", "", "2001:db8:ffff::1");
+	fails += t_suffix("2001:db8:ffff::1", "ab", "2001:db8:ffff::ab");
+	fails += t_suffix("2001:db8:ffff::1", "BEEF", "2001:db8:ffff::beef");
+	fails += t_suffix("2001:db8:1:2:3:4:5:6", "f", "2001:db8:1:2:3:4:5:f");
+	fails += t_suffix("2001:db8::", "1", "2001:db8::1");
+	fails += t_suffix("2001:db8:ffff::1", "12345", "2001:db8:ffff::1");
+	fails += t_suffix("2001:db8:ffff::1", "zz", "2001:db8:ffff::1");
+	fails += t_suffix("2001:db8:ffff::1", "1:2", "2001:db8:ffff::1");
+
+	/* zone macro usage */
+
+	fails += t_expect(monitor_extip_zone_uses("./extip-corpus/both.zone") ==
+			  (MON_EXTIP_USES_4 | MON_EXTIP_USES_6), "both macros");
+	fails += t_expect(monitor_extip_zone_uses("./extip-corpus/v6.zone") ==
+			  MON_EXTIP_USES_6, "v6 macro only");
+	fails += t_expect(!monitor_extip_zone_uses("./extip-corpus/static.zone"),
+			  "no macros");
+	fails += t_expect(monitor_extip_zone_uses("./extip-corpus/nope.zone") < 0,
+			  "missing zone");
+
+	/* values handed to the signer, with and without a stored suffix */
+
+	monitor_extip_for_zone(&vhd, MON_EXTIP_USES_4 | MON_EXTIP_USES_6,
+			       ip4, sizeof(ip4), ip6, sizeof(ip6));
+	fails += t_expect(!strcmp(ip4, "203.0.113.7") &&
+			  !strcmp(ip6, "2001:db8:ffff::1"),
+			  "no suffix: DHT addresses as detected");
+
+	fails += t_expect(!t_write_file("./extip-corpus/domains/ipv6_suffix.txt",
+					"a1\n"), "write suffix");
+	monitor_extip_for_zone(&vhd, MON_EXTIP_USES_6, ip4, sizeof(ip4),
+			       ip6, sizeof(ip6));
+	fails += t_expect(!ip4[0] && !strcmp(ip6, "2001:db8:ffff::a1"),
+			  "suffix applied, unused family empty");
+
+	/* the signed-with record */
+
+	fails += t_expect(!monitor_extip_signed_matches(
+				"./extip-corpus/both.zone.signed.extip",
+				"203.0.113.7", "2001:db8:ffff::a1"),
+			  "no record: never signed with these");
+	fails += t_expect(!monitor_extip_record(
+				"./extip-corpus/both.zone.signed.extip",
+				"203.0.113.7", "2001:db8:ffff::a1"),
+			  "record written");
+	fails += t_expect(monitor_extip_signed_matches(
+				"./extip-corpus/both.zone.signed.extip",
+				"203.0.113.7", "2001:db8:ffff::a1"),
+			  "record matches the same values");
+	fails += t_expect(!monitor_extip_signed_matches(
+				"./extip-corpus/both.zone.signed.extip",
+				"203.0.113.7", "2001:db8:ffff::1"),
+			  "suffix change does not match");
+	fails += t_expect(!monitor_extip_signed_matches(
+				"./extip-corpus/both.zone.signed.extip",
+				"203.0.113.8", "2001:db8:ffff::a1"),
+			  "v4 change does not match");
+	fails += t_expect(!monitor_extip_signed_matches(
+				"./extip-corpus/both.zone.signed.extip",
+				"203.0.113.7", ""),
+			  "lost v6 does not match");
+
+	lws_dir("./extip-corpus", NULL, lws_dir_rm_rf_cb);
+	rmdir("./extip-corpus");
+
+	lwsl_user("Completed: %s\n", fails ? "FAIL" : "PASS");
+
+	return !!fails;
+}

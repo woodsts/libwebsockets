@@ -142,6 +142,23 @@ struct vhd {
 	/* server IP inventory geolocation state (root process) */
 	lws_sorted_usec_list_t sul_geo;
 	struct inv_geo		geo;
+
+	/*
+	 * Root process: the DHT-detected external addresses, as forwarded
+	 * by the proxy over our stdin, see monitor-extip.c.  extip_gen
+	 * counts changes; extip_gen_scanned is the generation every
+	 * dynamic zone was last checked against
+	 */
+	char			extip4[64];
+	char			extip6[64];
+	lws_usec_t		extip_since;	/* first address known */
+	unsigned int		extip_gen;
+	unsigned int		extip_gen_scanned;
+	int			extip_retry;
+
+	char			ctl_rx[512];
+	size_t			ctl_rx_len;
+	char			ctl_rx_discard;
 };
 
 struct monitor_req_args {
@@ -200,6 +217,44 @@ json_escape(char *esc, size_t esc_len, const char *s)
  */
 #define MON_ESC_DOMAIN_SZ	(6 * 256 + 8)
 #define MON_ESC_FIELD_SZ	(6 * 128 + 8)
+
+/* monitor-extip.c */
+
+#define MON_EXTIP_USES_4	1
+#define MON_EXTIP_USES_6	2
+
+/*
+ * How long after the first external address is known a zone still waits
+ * for the other family before signing it without
+ */
+#define MON_EXTIP_SETTLE_US	(60 * LWS_US_PER_SEC)
+
+/* the stored IPv6 suffix, or empty */
+void
+monitor_extip_suffix(struct vhd *vhd, char *out, size_t outlen);
+/* canonical ip6 with its low 16 bits replaced by a 1..4 hex digit suffix */
+int
+monitor_extip_apply_suffix(char *out, size_t outlen, const char *ip6,
+			   const char *suffix);
+/* MON_EXTIP_USES_* bits of the macros the zonefile uses, or -1 */
+int
+monitor_extip_zone_uses(const char *zone_path);
+/* the macro values for a zone using \p uses, empty where unused / unknown */
+void
+monitor_extip_for_zone(struct vhd *vhd, int uses, char *ip4, size_t ip4_len,
+		       char *ip6, size_t ip6_len);
+int
+monitor_extip_signed_matches(const char *state_path, const char *ip4,
+			     const char *ip6);
+int
+monitor_extip_record(const char *state_path, const char *ip4, const char *ip6);
+int
+monitor_extip_ctl_line(struct vhd *vhd, const char *line, size_t len);
+void
+monitor_extip_ctl_rx(struct vhd *vhd, const char *in, size_t len);
+int
+callback_monitor_ctl(struct lws *wsi, enum lws_callback_reasons reason,
+		     void *user, void *in, size_t len);
 
 /* monitor-inventory.c */
 

@@ -7,7 +7,7 @@ The `lws-dht-dnssec-monitor` plugin automates the tracking, signing, and uploadi
 2. Checks for missing ZSK or KSK DNSSEC keys and automatically generates them if they don't exist.
 3. Compares the modification timestamps of unsigned zone files against their signed counterparts to detect upstream zone edits.
 4. Securely merges any active temporary ACME zones (via `dns-01`) into the main zone payload before authoritative signing.
-5. Automatically signs (or re-signs) the zone if the upstream `.zone` file is newer than the `.signed` file.
+5. Automatically signs (or re-signs) the zone if the upstream `.zone` file is newer than the `.signed` file, or if the DHT-detected external addresses its `${EXTIP4}` / `${EXTIP6}` records resolve to have changed (see below).
 6. Automatically publishes the resulting JWS payloads directly into the libwebsockets DHT for propagation.
 
 This monitor is designed specifically to work in tandem with the [lws-acme-client](../acme-client/protocol_lws_acme_client.md) using the centralized multi-certificate management flow, allowing your LAN servers to handle thousands of domains securely.
@@ -129,9 +129,18 @@ Based on the global `/etc/lwsws/policy` `dns_base_dir` usage (e.g. `/var/lib/lws
     │   └── example.com.json            <-- Your JSON configuration here
     ├── example.com.zone            <-- The raw unsigned DNS zone file
     ├── example.com.signed          <-- (Generated automatically)
+    ├── example.com.zone.signed.extip <-- (Generated for zones using ${EXTIP4} / ${EXTIP6})
     ├── example.com.jws             <-- (Generated automatically)
     ├── example.com.zsk.private.jwk <-- (Generated automatically if missing)
     └── example.com.ksk.private.jwk <-- (Generated automatically if missing)
 ```
 
 If you edit `example.com.zone`, the monitor will automatically detect the timestamp mismatch during its next periodic scan (every 5 minutes) and re-sign the zone, replacing the `.signed` and `.jws` outputs.
+
+## Dynamic external addresses
+
+Zonefile records can use `${EXTIP4}` / `${EXTIP6}` for the host's external addresses, as detected by the DHT. The DHT runs in the unprivileged lwsws process, while zones are signed by the spawned root monitor process; lwsws forwards every change of the detected addresses to the root process over the root process' stdin pipe, which is otherwise only used to hand it the IPC auth token at spawn.
+
+`${EXTIP6}` has the IPv6 suffix set in the UI applied, as the zonefile editor previews it: the suffix is one hex group that replaces the last 16 bits of the detected address. With no suffix set, the address is used as the DHT detected it.
+
+After signing a zone that uses either macro, the monitor records the values it signed with in `<domain>.zone.signed.extip`. Whenever the detected addresses or the suffix change, including after a restart, only zones whose record differs are re-signed and so republished. A zone using the macros is not signed at all until at least one external address is known, since that would publish it without those records; if only one family has been detected, the other waits up to a minute to appear before the zone is signed without it (the `${EXTIP6}` lines are then dropped, as the signer documents).

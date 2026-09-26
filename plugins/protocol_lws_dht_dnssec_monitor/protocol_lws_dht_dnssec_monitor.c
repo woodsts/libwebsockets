@@ -78,12 +78,54 @@ struct cert_check_result {
 
 extern const struct lws_protocols lws_dht_dnssec_monitor_protocols[];
 
+/*
+ * The root process signs the zones but runs no DHT: hand it the current
+ * ext-ips payload as one line on its stdin, the control channel described
+ * in monitor-extip.c
+ */
+
+static void
+monitor_ctl_forward_ext_ips(struct vhd *vhd)
+{
+	char line[sizeof(vhd->ext_ips) + 1];
+	lws_filefd_type fd;
+	size_t n, m;
+
+	if (!vhd->lsp || !vhd->ext_ips[0])
+		return;
+
+	n = strlen(vhd->ext_ips);
+	memcpy(line, vhd->ext_ips, n);
+	/* the payload must not break the line framing */
+	for (m = 0; m < n; m++)
+		if (line[m] == '\n' || line[m] == '\r')
+			line[m] = ' ';
+	line[n++] = '\n';
+
+	fd = lws_spawn_get_fd_stdxxx(vhd->lsp, 0);
+#if defined(WIN32)
+	{
+		DWORD bw;
+
+		if (!fd || !WriteFile(fd, line, (DWORD)n, &bw, NULL) ||
+		    bw != (DWORD)n)
+			lwsl_err("%s: failed forwarding ext-ips to root\n",
+				 __func__);
+	}
+#else
+	/* far below PIPE_BUF, so the nonblocking write is all or nothing */
+	if (fd < 0 || write(fd, line, n) != (ssize_t)n)
+		lwsl_err("%s: failed forwarding ext-ips to root\n", __func__);
+#endif
+}
+
 static int
 smd_cb_network(void *opaque, lws_smd_class_t c, lws_usec_t ts, void *buf, size_t len)
 {
 	struct vhd *vhd = (struct vhd *)opaque;
 	if ((c & LWSSMDCL_NETWORK) && buf && (char *)strstr((const char *)buf, "\"ext-ips\"")) {
 		lws_strncpy(vhd->ext_ips, (const char *)buf, sizeof(vhd->ext_ips));
+		monitor_ctl_forward_ext_ips(vhd);
 		lws_start_foreach_dll_safe(struct lws_dll2 *, d, d1, lws_dll2_get_head(&vhd->ui_clients)) {
 			struct pss *pss = lws_container_of(d, struct pss, list);
 			pss->send_ext_ips = 1;
@@ -246,8 +288,12 @@ scan_dir_cb_fast(const char *dirpath, void *user, struct lws_dir_entry *lde)
 		struct stat st_acme;
 		int has_acme = (stat(acme_path, &st_acme) == 0);
 
-		int needs_resign = 0;
+		int needs_resign = 0, dyn = -1;
 		struct stat st_in, st_out;
+		char state_path[1100], ip4[64], ip6[64];
+
+		/* what the zone's ${EXTIP4} / ${EXTIP6} were last signed as */
+		lws_snprintf(state_path, sizeof(state_path), "%s.extip", output_path);
 
 		if (stat(input_path, &st_in) == 0) {
 			if (stat(output_path, &st_out) != 0) {
@@ -266,26 +312,84 @@ scan_dir_cb_fast(const char *dirpath, void *user, struct lws_dir_entry *lde)
 					lwsl_info("dnssec-monitor: unsigned zone %s (mtime %lu) is NOT newer than signed zone %s (mtime %lu), skipping resign.\n", input_path, (unsigned long)st_in.st_mtime, output_path, (unsigned long)st_out.st_mtime);
 				}
 			}
+
+			/*
+			 * The external addresses (or the IPv6 suffix) changed
+			 * since the last walk: re-sign the zones using them
+			 * whose signed copy has different values in it
+			 */
+			if (!needs_resign &&
+			    vhd->extip_gen != vhd->extip_gen_scanned) {
+				dyn = monitor_extip_zone_uses(input_path);
+				if (dyn > 0) {
+					monitor_extip_for_zone(vhd, dyn, ip4, sizeof(ip4),
+							       ip6, sizeof(ip6));
+					if (!monitor_extip_signed_matches(state_path, ip4, ip6)) {
+						lwsl_user("dnssec-monitor: %s was signed with other external addresses, triggering resign\n",
+							  pc.common_name);
+						needs_resign = 1;
+					}
+				}
+			}
 		} else {
 			lwsl_info("%s: Missing domain %s base zone config, skipping resign\n", __func__, input_path);
+		}
+
+		if (needs_resign) {
+			if (dyn < 0)
+				dyn = monitor_extip_zone_uses(input_path);
+			if (dyn < 0)
+				dyn = 0;
+
+			/*
+			 * Signing now would drop every ${EXTIP4} / ${EXTIP6}
+			 * record from the published zone: wait for the proxy
+			 * to forward the DHT's findings.  A family the DHT
+			 * never finds is left out as documented, but only
+			 * after the other one has had time to settle, so a
+			 * restart does not briefly publish without it.
+			 */
+			if (dyn && !vhd->extip4[0] && !vhd->extip6[0]) {
+				lwsl_info("%s: deferring %s until the external addresses are known\n",
+					  __func__, pc.common_name);
+				needs_resign = 0;
+			} else if ((((dyn & MON_EXTIP_USES_4) && !vhd->extip4[0]) ||
+				    ((dyn & MON_EXTIP_USES_6) && !vhd->extip6[0])) &&
+				   lws_now_usecs() - vhd->extip_since < MON_EXTIP_SETTLE_US) {
+				lwsl_info("%s: deferring %s while the external addresses settle\n",
+					  __func__, pc.common_name);
+				needs_resign = 0;
+				vhd->extip_retry = 1;
+			}
 		}
 
 		if (needs_resign) {
 			char wd[512];
 			lws_snprintf(wd, sizeof(wd), "%s/domains/%s", vhd->base_dir, pc.common_name);
 
-			lwsl_user("%s: Signing zone for %s\n", __func__, pc.common_name);
+			monitor_extip_for_zone(vhd, dyn, ip4, sizeof(ip4), ip6, sizeof(ip6));
+
+			lwsl_user("%s: Signing zone for %s (EXTIP4 '%s', EXTIP6 '%s')\n", __func__,
+				  pc.common_name, ip4, ip6);
 			struct lws_dht_dnssec_signzone_args sargs;
 			memset(&sargs, 0, sizeof(sargs));
 			sargs.domain = pc.common_name;
 			sargs.workdir = wd;
 			sargs.certs_dir = vhd->acme_production ? "production" : "staging";
 			sargs.sign_validity_duration = vhd->signature_duration;
+			lws_strncpy(sargs.ipv4, ip4, sizeof(sargs.ipv4));
+			lws_strncpy(sargs.ipv6, ip6, sizeof(sargs.ipv6));
 
 			if (vhd->ops->signzone(vhd->context, &sargs)) {
 				lwsl_user("%s: Failed signing zone for %s\n", __func__, pc.common_name);
+				if (dyn)
+					vhd->extip_retry = 1;
 			} else {
 				lwsl_user("%s: Successfully signed zone for %s\n", __func__, pc.common_name);
+				if (!dyn)
+					unlink(state_path);
+				else if (monitor_extip_record(state_path, ip4, ip6))
+					vhd->extip_retry = 1;
 			}
 		}
 	}
@@ -369,18 +473,36 @@ scan_dir_cb_expiry(const char *dirpath, void *user, struct lws_dir_entry *lde)
 	return 0;
 }
 
+/*
+ * One resign walk over every domain.  Once every zone has been checked
+ * against the current external addresses, only a zone edit or a further
+ * change of address makes them look again; a failed dynamic resign keeps
+ * the whole generation pending, so it is retried on the next walk.
+ */
+
+static void
+monitor_resign_walk(struct vhd *vhd)
+{
+	unsigned int gen = vhd->extip_gen;
+	char scan_path[1024];
+
+	lws_snprintf(scan_path, sizeof(scan_path), "%s/domains", vhd->base_dir);
+
+	vhd->extip_retry = 0;
+	lws_dir(scan_path, vhd, scan_dir_cb_fast);
+	if (!vhd->extip_retry)
+		vhd->extip_gen_scanned = gen;
+}
+
 #if defined(LWS_WITH_DIR)
 static void
 dir_notify_cb(const char *path, int is_file, void *user)
 {
 	struct vhd *vhd = (struct vhd *)user;
-	char scan_path[1024];
 
-	lws_snprintf(scan_path, sizeof(scan_path), "%s/domains", vhd->base_dir);
+	lwsl_user("%s: Detected inotify filesystem change %s (file: %d), manually rescanning domains in %s\n", __func__, path, is_file, vhd->base_dir);
 
-	lwsl_user("%s: Detected inotify filesystem change %s (file: %d), manually rescanning domains: %s\n", __func__, path, is_file, scan_path);
-
-	lws_dir(scan_path, vhd, scan_dir_cb_fast);
+	monitor_resign_walk(vhd);
 }
 #endif
 
@@ -493,12 +615,10 @@ static void
 dnssec_monitor_fast_timer_cb(lws_sorted_usec_list_t *sul)
 {
 	struct vhd *vhd = lws_container_of(sul, struct vhd, sul_fast_timer);
-	char scan_path[1024];
 
 	refresh_acme_production(vhd);
 
-	lws_snprintf(scan_path, sizeof(scan_path), "%s/domains", vhd->base_dir);
-	lws_dir(scan_path, vhd, scan_dir_cb_fast);
+	monitor_resign_walk(vhd);
 
 	lws_sul_schedule(vhd->context, 0, &vhd->sul_fast_timer, dnssec_monitor_fast_timer_cb, 5 * LWS_US_PER_SEC);
 }
@@ -1196,24 +1316,10 @@ handle_req_get_ipv6_suffix(struct vhd *vhd, struct pss *root_pss, struct monitor
 {
 	char *tx = (char *)&root_pss->tx[LWS_PRE + root_pss->tx_len];
 	char *tx_end = (char *)root_pss->tx + sizeof(root_pss->tx);
-	char path[1024];
-	char suffix[64] = {0};
+	char suffix[64];
 	char esc_suffix[MON_ESC_FIELD_SZ];
 
-	lws_snprintf(path, sizeof(path), "%s/domains/ipv6_suffix.txt", vhd->base_dir);
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		lws_snprintf(path, sizeof(path), "%s/domains/ipv6_suffix.txt", vhd->base_dir);
-		fd = open(path, O_RDONLY);
-	}
-	if (fd >= 0) {
-		ssize_t n = read(fd, suffix, sizeof(suffix) - 1);
-		if (n > 0) suffix[n] = '\0';
-		close(fd);
-		/* Trim whitespace just in case */
-		for (int i = (int)strlen(suffix) - 1; i >= 0 && (suffix[i] == '\n' || suffix[i] == '\r' || suffix[i] == ' '); i--)
-			suffix[i] = '\0';
-	}
+	monitor_extip_suffix(vhd, suffix, sizeof(suffix));
 
 	/*
 	 * The stored file is only as trustworthy as whoever can write it, so
@@ -1251,6 +1357,9 @@ handle_req_set_ipv6_suffix(struct vhd *vhd, struct pss *root_pss, struct monitor
 			goto done;
 		}
 	}
+	/* zones using ${EXTIP6} are re-checked against the new suffix */
+	vhd->extip_gen++;
+
 	tx += lws_snprintf(tx, lws_ptr_diff_size_t(tx_end, tx), "{\"req\":\"%s\",\"status\":\"ok\"}\n", a->req);
 done:
 	root_pss->tx_len = lws_ptr_diff_size_t(tx, (char *)&root_pss->tx[LWS_PRE]);
@@ -2968,6 +3077,7 @@ callback_dht_dnssec_monitor(struct lws *wsi, enum lws_callback_reasons reason,
 
 						static const struct lws_protocols *pprotocols[] = {
 							&lws_dht_dnssec_monitor_protocols[1],
+							&lws_dht_dnssec_monitor_protocols[2],
 							NULL
 						};
 						info.pprotocols = pprotocols;
@@ -3003,6 +3113,8 @@ callback_dht_dnssec_monitor(struct lws *wsi, enum lws_callback_reasons reason,
 								vhd->signature_duration = 31536000;
 
 								const char *auth_token = lws_cmdline_option_cx(cx, "--auth-token");
+								const char *ctl_rest = NULL;
+								size_t ctl_rest_len = 0;
 								char buf[256];
 								if (!auth_token) {
 									int n, retries = 50;
@@ -3013,7 +3125,13 @@ callback_dht_dnssec_monitor(struct lws *wsi, enum lws_callback_reasons reason,
 									}
 									if (n > 0) {
 										buf[n] = '\0';
-										char *p = (char *)strchr(buf, '\n'); if (p) *p = '\0';
+										char *p = (char *)strchr(buf, '\n');
+										if (p) {
+											/* control lines may already follow the token */
+											*p = '\0';
+											ctl_rest = p + 1;
+											ctl_rest_len = lws_ptr_diff_size_t(buf + n, ctl_rest);
+										}
 										p = (char *)strchr(buf, '\r'); if (p) *p = '\0';
 										auth_token = buf;
 									}
@@ -3027,6 +3145,28 @@ callback_dht_dnssec_monitor(struct lws *wsi, enum lws_callback_reasons reason,
 									lws_hex_to_byte_array(auth_token, vhd->auth_jwk.e[LWS_GENCRYPTO_OCT_KEYEL_K].buf, 64);
 									lwsl_notice("%s: securely mapped symmetric daemon auth-token\n", __func__);
 								}
+
+								/*
+								 * stdin stays open after the token as the
+								 * proxy's control channel, see
+								 * monitor-extip.c
+								 */
+								if (ctl_rest_len)
+									monitor_extip_ctl_rx(vhd, ctl_rest, ctl_rest_len);
+#if !defined(WIN32)
+								{
+									lws_adopt_desc_t ad;
+
+									memset(&ad, 0, sizeof(ad));
+									ad.vh = vh;
+									ad.type = LWS_ADOPT_RAW_FILE_DESC;
+									ad.fd.filefd = 0;
+									ad.vh_prot_name = "lws-dht-dnssec-monitor-ctl";
+									ad.opaque = vhd;
+									if (!lws_adopt_descriptor_vhost_via_info(&ad))
+										lwsl_err("%s: unable to adopt the proxy control channel\n", __func__);
+								}
+#endif
 
 								/* Borrow ops from the invoking vhost that originally had it configured */
 								const struct lws_protocols *prot = lws_vhost_name_to_protocol(vhost, "lws-dht-dnssec");
@@ -3313,6 +3453,9 @@ callback_dht_dnssec_monitor(struct lws *wsi, enum lws_callback_reasons reason,
 #endif
 				vhd->root_process_active = 1;
 				lwsl_notice("%s: Spawned root monitor process successfully\n", __func__);
+
+				/* in case the DHT already reported them */
+				monitor_ctl_forward_ext_ips(vhd);
 
 				/* Engage parent monitor to execute DHT publications off completed JWS child drops cleanly */
 				vhd->proxy_uid = (uid_t)-1;
@@ -4034,6 +4177,10 @@ LWS_VISIBLE const struct lws_protocols lws_dht_dnssec_monitor_protocols[] = {
 		.name = "lws-dht-dnssec-monitor",
 		.callback = callback_dht_dnssec_monitor,
 		.per_session_data_size = sizeof(struct pss),
+	},
+	{
+		.name = "lws-dht-dnssec-monitor-ctl",
+		.callback = callback_monitor_ctl,
 	},
 };
 LWS_VISIBLE const lws_plugin_protocol_t lws_dht_dnssec_monitor = {
