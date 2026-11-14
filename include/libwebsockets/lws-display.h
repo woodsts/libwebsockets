@@ -245,8 +245,18 @@ typedef struct lws_display_state {
 	 * .ic from, with what's at its sides white */
 	uint8_t				inset[4];
 	/**< the inset in use, see lws_display_t .inset */
+	uint8_t				inset_stale;
+	/**< LWS_DISPLAY_INSET_STALE_*: rows in the inset that may still
+	 * show what was there before, eg, it was just made bigger, so they're
+	 * made white by the next update reaching them */
+	uint8_t				inset_due;
+	/**< the inset rows below the update in progress are made white at its
+	 * end */
 
 } lws_display_state_t;
+
+#define LWS_DISPLAY_INSET_STALE_TOP		(1 << 0)
+#define LWS_DISPLAY_INSET_STALE_BOTTOM		(1 << 1)
 
 /* Used for async display driver events, eg, EPD refresh completion */
 typedef int (*lws_display_completion_t)(lws_display_state_t *lds, int a);
@@ -291,8 +301,11 @@ lws_display_state_fini(lws_display_state_t *lds);
  * \param inset: px hidden at the left, top, right and bottom edges
  *
  * Sets lds->ic to the part of the surface inside \p inset, for what is laid
- * out and drawn after it.  Returns 0, or nonzero if it would leave nothing to
- * see, when nothing changes.
+ * out and drawn after it.  What is shown in the rows above and below it, if
+ * they weren't in the inset before, is left as it is until the next update
+ * reaching them, eg, one of all of what can be seen, which makes them white.
+ * Returns 0, or nonzero if it would leave nothing to see, when nothing
+ * changes.
  */
 LWS_VISIBLE LWS_EXTERN int
 lws_display_set_inset(lws_display_state_t *lds, const uint8_t inset[4]);
@@ -310,6 +323,10 @@ lws_display_set_inset(lws_display_state_t *lds, const uint8_t inset[4]);
  * surface, and widened to all of it, and the lines given are put in a line
  * of the whole surface with the inset at its sides white.  So the display's
  * blit is given what it always is, lines of its whole surface.
+ *
+ * If the inset changed, the first box starting at the top of lds->ic, and
+ * the first ending at its bottom, are widened to the inset rows above or below
+ * them, which are blitted white with them.
  */
 LWS_VISIBLE LWS_EXTERN int
 lws_display_blit(lws_display_state_t *lds, const uint8_t *src, lws_box_t *box,

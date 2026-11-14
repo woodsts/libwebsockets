@@ -126,6 +126,15 @@ lws_display_set_inset(lws_display_state_t *lds, const uint8_t inset[4])
 	if (w < 1 || h < 1)
 		return 1;
 
+	if (memcmp(lds->inset, inset, sizeof(lds->inset)))
+		/*
+		 * Rows in the inset now may show something from before: the
+		 * next updates reaching them make them white
+		 */
+		lds->inset_stale = (uint8_t)
+			((inset[1] ? LWS_DISPLAY_INSET_STALE_TOP : 0) |
+			 (inset[3] ? LWS_DISPLAY_INSET_STALE_BOTTOM : 0));
+
 	memcpy(lds->inset, inset, sizeof(lds->inset));
 
 	lds->ic = *sic;
@@ -142,13 +151,65 @@ lws_display_set_inset(lws_display_state_t *lds, const uint8_t inset[4])
 	return 0;
 }
 
+/* the bytes in a line of the whole surface */
+
+static size_t
+surface_line_len(const lws_display_state_t *lds)
+{
+	const lws_surface_info_t *sic = &lds->disp->ic;
+
+	return (size_t)sic->wh_px[0].whole *
+	       (sic->greyscale ? 1u : (sic->render_to_rgba ? 4u : 3u));
+}
+
+/* the line of the whole surface lines drawn on what can be seen go in */
+
+static uint8_t *
+inset_line(lws_display_state_t *lds)
+{
+	if (!lds->inset_line) {
+		lds->inset_line = lws_malloc(surface_line_len(lds), __func__);
+		if (lds->inset_line)
+			/* the inset at its sides stays white */
+			memset(lds->inset_line, 0xff, surface_line_len(lds));
+	}
+
+	return lds->inset_line;
+}
+
+/* blit the rows of the surface from y0 up to y1 white */
+
+static int
+blit_white(lws_display_state_t *lds, int y0, int y1, lws_dll2_owner_t *ids)
+{
+	uint8_t *line = inset_line(lds);
+	lws_box_t b;
+
+	if (!line)
+		return 1;
+
+	/* the part inside the sides is written again by the next line */
+	memset(line, 0xff, surface_line_len(lds));
+
+	memset(&b, 0, sizeof(b));
+	b.w = lds->disp->ic.wh_px[0];
+	b.h.whole = 1;
+	for (b.y.whole = y0; b.y.whole < y1; b.y.whole++)
+		if (lds->disp->blit(lds, line, &b, ids))
+			return 1;
+
+	return 0;
+}
+
 int
 lws_display_blit(lws_display_state_t *lds, const uint8_t *src, lws_box_t *box,
 		 lws_dll2_owner_t *ids)
 {
 	const lws_surface_info_t *sic = &lds->disp->ic;
 	size_t bpp = sic->greyscale ? 1 : (sic->render_to_rgba ? 4 : 3);
+	int top = 0, r;
 	lws_box_t b;
+	uint8_t *line;
 
 	if (!(lds->inset[0] | lds->inset[1] | lds->inset[2] | lds->inset[3]))
 		return lds->disp->blit(lds, src, box, ids);
@@ -163,19 +224,61 @@ lws_display_blit(lws_display_state_t *lds, const uint8_t *src, lws_box_t *box,
 		b.w = sic->wh_px[0];
 	}
 
-	if (b.h.whole == 1 && src && (lds->inset[0] || lds->inset[2])) {
-		/* a line drawn on what can be seen, inside a line of it all */
-		if (!lds->inset_line) {
-			lds->inset_line = lws_malloc((size_t)sic->wh_px[0].whole *
-						     bpp, __func__);
-			if (!lds->inset_line)
+	switch (box->h.whole) {
+	case 0:
+		/* the end of an update: the stale rows below it first */
+		if (lds->inset_due) {
+			lds->inset_due = 0;
+			if (blit_white(lds, sic->wh_px[1].whole - lds->inset[3],
+				       sic->wh_px[1].whole, ids))
 				return 1;
-			memset(lds->inset_line, 0xff,
-			       (size_t)sic->wh_px[0].whole * bpp);
+			lds->inset_stale = (uint8_t)(lds->inset_stale &
+					~LWS_DISPLAY_INSET_STALE_BOTTOM);
 		}
-		memcpy(lds->inset_line + (size_t)lds->inset[0] * bpp, src,
+		break;
+
+	case 1:
+		if (!src || !(lds->inset[0] || lds->inset[2]))
+			break;
+
+		/* a line drawn on what can be seen, inside a line of it all */
+		line = inset_line(lds);
+		if (!line)
+			return 1;
+		memcpy(line + (size_t)lds->inset[0] * bpp, src,
 		       (size_t)lds->ic.wh_px[0].whole * bpp);
-		src = lds->inset_line;
+		src = line;
+		break;
+
+	default:
+		/*
+		 * The start of an update.  Stale rows in the inset next to it
+		 * are made white with it, so it's widened to them: its lines
+		 * are still all together, for a display taking a band
+		 */
+		lds->inset_due = 0;
+		if ((lds->inset_stale & LWS_DISPLAY_INSET_STALE_TOP) &&
+		    !box->y.whole) {
+			top = lds->inset[1];
+			b.y.whole = 0;
+			b.h.whole += top;
+		}
+		if ((lds->inset_stale & LWS_DISPLAY_INSET_STALE_BOTTOM) &&
+		    box->y.whole + box->h.whole >= lds->ic.wh_px[1].whole) {
+			lds->inset_due = 1;
+			b.h.whole += lds->inset[3];
+		}
+
+		r = lds->disp->blit(lds, src, &b, ids);
+		if (r || !top)
+			return r;
+
+		if (blit_white(lds, 0, top, ids))
+			return 1;
+		lds->inset_stale = (uint8_t)(lds->inset_stale &
+					~LWS_DISPLAY_INSET_STALE_TOP);
+
+		return 0;
 	}
 
 	return lds->disp->blit(lds, src, &b, ids);

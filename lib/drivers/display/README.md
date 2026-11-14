@@ -47,6 +47,14 @@ surface, so the display's own blit is still given lines of its whole surface.
 is on `.ic`.  The inset can be changed at runtime with
 `lws_display_set_inset()`, eg, while finding out what it should be.
 
+Rows in the inset are white, but they're only blitted when they may show
+something else: by the first update, since what the display showed before is
+unknown, and after the inset changed, eg, it was made bigger over rows that
+were drawn on.  Then the first update starting at the top of `.ic`, and the
+first ending at its bottom, are widened to include the inset rows above or
+below them, so a display taking bands is still given each band's lines all
+together.
+
 ## Animation
 
 Something animated on a display, eg, a spinner, is moved on by updating the

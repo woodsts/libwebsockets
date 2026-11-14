@@ -20,6 +20,10 @@
  *  - a point on the surface, eg, a touch, is where it is on what can be
  *    seen, and one in the inset is said to be outside it
  *
+ *  - rows in the inset that may show something from before, eg, it was just
+ *    made bigger, are made white by the next update reaching them, then
+ *    left alone, including when the update comes in bands
+ *
  *  - an inset leaving nothing to see is refused
  *
  *  - with no inset, what's blitted goes straight to the display
@@ -100,10 +104,10 @@ static const lws_display_t disp = {
 	.inset			= { 2, 1, 3, 2 },
 };
 
-/* an update of all of what can be seen, black */
+/* an update of rows y0 up to y1 of what can be seen, black */
 
 static void
-draw_black(lws_display_state_t *lds)
+draw_band(lws_display_state_t *lds, int y0, int y1)
 {
 	uint8_t line[W];
 	lws_box_t box;
@@ -112,11 +116,12 @@ draw_black(lws_display_state_t *lds)
 	memset(line, 0, sizeof(line));
 	memset(&box, 0, sizeof(box));
 	box.w = lds->ic.wh_px[0];
-	box.h = lds->ic.wh_px[1];
+	box.y.whole = y0;
+	box.h.whole = y1 - y0;
 	lws_display_blit(lds, (uint8_t *)lds, &box, NULL);
 
 	box.h.whole = 1;
-	for (y = 0; y < lds->ic.wh_px[1].whole; y++) {
+	for (y = y0; y < y1; y++) {
 		box.y.whole = y;
 		lws_display_blit(lds, line, &box, NULL);
 	}
@@ -125,12 +130,53 @@ draw_black(lws_display_state_t *lds)
 	lws_display_blit(lds, NULL, &box, NULL);
 }
 
+/* an update of all of what can be seen, black */
+
+static void
+draw_black(lws_display_state_t *lds)
+{
+	draw_band(lds, 0, lds->ic.wh_px[1].whole);
+}
+
+/*
+ * How many px of the pretend display aren't what an update of all of what can
+ * be seen, black, inside the inset l, t, r, b leaves: rows in the inset are
+ * white if they were made white, or the 0x80 they were set to before
+ */
+
+static int
+check_fb(int l, int t, int r, int b, int rows_whitened)
+{
+	int x, y, bad = 0, in;
+	uint8_t want;
+
+	for (y = 0; y < H; y++)
+		for (x = 0; x < W; x++) {
+			in = x >= l && x < W - r && y >= t && y < H - b;
+			if (y < t || y >= H - b)
+				want = rows_whitened ? 0xff : 0x80;
+			else
+				want = in ? 0 : 0xff;
+			if (fb[y][x] != want)
+				bad++;
+		}
+
+	return bad;
+}
+
+static void
+counts_reset(void)
+{
+	starts = ends = lines = 0;
+	memset(fb, 0x80, sizeof(fb));
+}
+
 static void
 test_inset(struct lws_context *cx)
 {
 	static const uint8_t nothing[4] = { 10, 0, 10, 0 };
 	lws_display_state_t lds;
-	int x, y, bad = 0, in;
+	int x, y, bad;
 
 	lws_display_state_init(&lds, cx, -1, -1, NULL, &disp);
 
@@ -144,9 +190,28 @@ test_inset(struct lws_context *cx)
 	      "visible %d x %d mm\n", (int)lds.ic.wh_mm[0].whole,
 	      (int)lds.ic.wh_mm[1].whole);
 
-	/* drawn on that, it lands inside the inset, which stays white */
+	/*
+	 * Drawn on that, it lands inside the inset, which is white.  What the
+	 * display showed in the rows of the inset before is unknown, so the
+	 * first update makes them white too, widened to all of the surface
+	 */
 
-	memset(fb, 0x80, sizeof(fb));
+	counts_reset();
+	draw_black(&lds);
+
+	check(starts == 1 && ends == 1 && lines == H,
+	      "%d starts, %d ends, %d lines\n", starts, ends, lines);
+	check(start_box.x.whole == 0 && start_box.y.whole == 0 &&
+	      start_box.w.whole == W && start_box.h.whole == H,
+	      "start box %d,%d %dx%d\n", (int)start_box.x.whole,
+	      (int)start_box.y.whole, (int)start_box.w.whole,
+	      (int)start_box.h.whole);
+	bad = check_fb(2, 1, 3, 2, 1);
+	check(!bad, "first: %d px wrong\n", bad);
+
+	/* after that, the rows in the inset are left alone */
+
+	counts_reset();
 	draw_black(&lds);
 
 	check(starts == 1 && ends == 1 && lines == H - 3,
@@ -156,18 +221,8 @@ test_inset(struct lws_context *cx)
 	      "start box %d,%d %dx%d\n", (int)start_box.x.whole,
 	      (int)start_box.y.whole, (int)start_box.w.whole,
 	      (int)start_box.h.whole);
-
-	for (y = 0; y < H; y++)
-		for (x = 0; x < W; x++) {
-			in = x >= 2 && x < W - 3 && y >= 1 && y < H - 2;
-			if (y < 1 || y >= H - 2) {
-				/* rows in the inset aren't blitted at all */
-				if (fb[y][x] != 0x80)
-					bad++;
-			} else if (fb[y][x] != (in ? 0 : 0xff))
-				bad++;
-		}
-	check(!bad, "%d px wrong\n", bad);
+	bad = check_fb(2, 1, 3, 2, 0);
+	check(!bad, "second: %d px wrong\n", bad);
 
 	/* a touch on the surface is where it is on what can be seen */
 
@@ -191,9 +246,64 @@ test_inset(struct lws_context *cx)
 	check(lws_display_set_inset(&lds, nothing), "nothing to see allowed\n");
 	check(lds.ic.wh_px[0].whole == W - 5 && lds.inset[0] == 2,
 	      "refused inset changed it\n");
+	check(!lds.inset_stale, "refused inset made rows stale\n");
 
 	lws_display_state_fini(&lds);
 	check(!lds.inset_line, "line not freed\n");
+}
+
+/*
+ * The inset is changed, eg, while finding out what it should be: rows that
+ * were drawn on before are in it now, and must be made white
+ */
+
+static void
+test_inset_change(struct lws_context *cx)
+{
+	static const uint8_t bigger[4] = { 2, 3, 3, 1 };
+	lws_display_state_t lds;
+	int bad;
+
+	lws_display_state_init(&lds, cx, -1, -1, NULL, &disp);
+	draw_black(&lds);
+
+	check(!lws_display_set_inset(&lds, bigger), "bigger refused\n");
+	check(lds.ic.wh_px[1].whole == H - 4, "visible h %d\n",
+	      (int)lds.ic.wh_px[1].whole);
+
+	/*
+	 * Updated in two bands: the top rows of the inset go with the band at
+	 * the top of what can be seen, the bottom with the one at its bottom,
+	 * each still lines all together
+	 */
+
+	counts_reset();
+	draw_band(&lds, 0, 2);
+	check(starts == 1 && lines == 3 + 2 && start_box.y.whole == 0 &&
+	      start_box.h.whole == 3 + 2, "top band: %d lines, box y %d h %d\n",
+	      lines, (int)start_box.y.whole, (int)start_box.h.whole);
+	draw_band(&lds, 2, H - 4);
+	check(starts == 2 && lines == H && start_box.y.whole == 3 + 2 &&
+	      start_box.h.whole == H - 4 - 2 + 1,
+	      "bottom band: %d lines, box y %d h %d\n", lines,
+	      (int)start_box.y.whole, (int)start_box.h.whole);
+	bad = check_fb(2, 3, 3, 1, 1);
+	check(!bad, "changed: %d px wrong\n", bad);
+	check(!lds.inset_stale, "still stale\n");
+
+	/* a band in the middle leaves the stale rows for one that reaches them */
+
+	check(!lws_display_set_inset(&lds, disp.inset), "back refused\n");
+	counts_reset();
+	draw_band(&lds, 2, 4);
+	check(lines == 2 && start_box.y.whole == 1 + 2 &&
+	      start_box.h.whole == 2, "middle band: %d lines, box y %d h %d\n",
+	      lines, (int)start_box.y.whole, (int)start_box.h.whole);
+	check(lds.inset_stale == (LWS_DISPLAY_INSET_STALE_TOP |
+				  LWS_DISPLAY_INSET_STALE_BOTTOM),
+	      "stale %d\n", lds.inset_stale);
+
+	lws_display_state_fini(&lds);
 }
 
 static void
@@ -242,6 +352,7 @@ main(int argc, const char **argv)
 	}
 
 	test_inset(cx);
+	test_inset_change(cx);
 	test_no_inset(cx);
 
 	lws_context_destroy(cx);

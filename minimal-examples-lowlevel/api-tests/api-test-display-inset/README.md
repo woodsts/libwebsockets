@@ -11,7 +11,15 @@ It checks
 
  - an update drawn on that and blitted with `lws_display_blit()` reaches the
    display as lines of its whole surface where they belong, with the inset at
-   their sides white, and the rows in the inset not blitted
+   their sides white
+
+ - the rows in the inset, whose contents aren't known at first, are made white
+   by the first update, then left alone
+
+ - after the inset is changed, eg, made bigger, its rows that may still show
+   what was drawn there before are made white by the next update reaching
+   them, including when updates come in bands, which are widened to the rows
+   so their lines are still all together
 
  - `lws_display_visible_xy()` gives where a point on the surface, eg, a
    touch, is on what can be seen, and says when it's in the inset
