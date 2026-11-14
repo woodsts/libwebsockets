@@ -191,7 +191,13 @@ typedef struct lws_epd_direct_esp32 {
 	/**< the shift register output the first bit shifted in ends up on,
 	 * eg, 7 for a 4094 with QP7 the far end */
 	uint8_t				frame_lead_ckv;
-	/**< extra gate clocks after the start pulse before the first row */
+	/**< extra gate clocks after the start pulse before the first row,
+	 * XOE comes on before the last of them.  2 for the ED047TC1, as
+	 * LilyGo's own code does */
+	uint16_t			sr_edge_ns;
+	/**< the shortest time between edges on the shift register's lines,
+	 * or 0 for 50ns.  A shift register on a slower supply, or behind
+	 * slow board wiring, needs more */
 } lws_epd_direct_esp32_t;
 
 LWS_VISIBLE LWS_EXTERN int

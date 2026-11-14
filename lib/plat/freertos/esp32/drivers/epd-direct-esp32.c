@@ -90,10 +90,18 @@
  */
 #define EPDD_PREFILL_NS		1000
 
-/* SPV before the CKV edge it's taken on: the datasheet wants 100ns */
-#define EPDD_SPV_SETUP_NS	200
+/*
+ * SPV before the CKV edge it's taken on: the datasheet wants 100ns, LilyGo's
+ * code gives it 1us.  The CKV clock it's taken on is high, then low, this
+ * long.
+ */
+#define EPDD_SPV_SETUP_NS	1000
+#define EPDD_SPV_CKV_US		10
 
-/* shortest time between edges we make on the shift register's lines */
+/*
+ * Shortest time between edges we make on the shift register's lines, unless
+ * the board gives .sr_edge_ns
+ */
 #define EPDD_SR_EDGE_NS		50
 
 /*
@@ -534,9 +542,16 @@ lcd_init(const lws_epd_direct_esp32_t *ee)
 	/* XCL idles high, data changes on its falling edge */
 	lcd_ll_set_clock_idle_level(dev, true);
 	lcd_ll_set_pixel_clock_edge(dev, false);
-	/* XSTL is low while a row is sent, otherwise high */
-	lcd_ll_set_dc_level(dev, true, true, true, false);
-	lcd_ll_set_phase_cycles(dev, 0, 0, 1);
+	/*
+	 * XSTL is high for two XCL cycles before a row's data, and low
+	 * otherwise.  The source driver must see it go from high to low on XCL
+	 * edges to start taking in a row: if it's only ever seen low while
+	 * XCL runs, it never starts.  The two cycles are a command phase, with
+	 * the bus at 0.  It's how LilyGo's own code drives it.
+	 */
+	lcd_ll_set_dc_level(dev, false, true, false, false);
+	lcd_ll_set_phase_cycles(dev, 2, 0, 1);
+	lcd_ll_set_command(dev, 8, 0);
 	lcd_ll_set_blank_cycles(dev, 1, 1);
 
 	/* the pins */
@@ -683,7 +698,8 @@ lws_epd_direct_esp32_init(const lws_epd_direct_bus_ops_t *bus)
 
 	memset(st, 0, sizeof(*st));
 	st->cyc_per_us = esp_rom_get_cpu_ticks_per_us();
-	st->sr_edge_cyc = ns_to_cyc(st, EPDD_SR_EDGE_NS);
+	st->sr_edge_cyc = ns_to_cyc(st, ee->sr_edge_ns ?
+					(uint32_t)ee->sr_edge_ns : EPDD_SR_EDGE_NS);
 
 	/* XLE is pulsed every row, if it's on a gpio we go straight to it */
 	st->le_gpio = -1;
@@ -802,29 +818,45 @@ lws_epd_direct_esp32_frame_start(const lws_epd_direct_bus_ops_t *bus)
 {
 	const lws_epd_direct_esp32_t *ee = to_ee(bus);
 	lws_epd_direct_esp32_state_t *st = ee->state;
-	uint32_t sym = ckv_sym(st->ckv_min_hi, st->ckv_min_lo);
 	uint8_t n;
 
 	ckv_wait(st);
 
 	/*
 	 * The gate driver takes the start pulse on a CKV rising edge, then each
-	 * CKV moves it on a row.  SPV has to be set up 100ns before the edge,
-	 * and go away at least 100ns after it, but before CKV falls.
+	 * CKV moves it on a row.  This is how LilyGo's own code for the
+	 * ED047TC1 starts it, which is known to work on the panel: a short CKV
+	 * clock first, then SPV, and a long CKV clock that SPV goes away
+	 * during.  Then .frame_lead_ckv more clocks before the first row, with
+	 * XOE coming on before the last of them.
 	 */
 
 	ctl_set(ee, LWS_EPDD_CTL_MODE, 1);
+	ckv_pulse(st, ckv_sym(EPDD_TICKS_PER_US, EPDD_TICKS_PER_US));
+	ckv_wait(st);
+
 	ctl_set(ee, LWS_EPDD_CTL_STV, 1);
 	spin_ns(st, EPDD_SPV_SETUP_NS);
-	ckv_pulse(st, sym);
-	spin_ns(st, ((uint32_t)st->ckv_min_hi * 1000u / EPDD_TICKS_PER_US) / 2);
+	ckv_pulse(st, ckv_sym(EPDD_SPV_CKV_US * EPDD_TICKS_PER_US,
+			      EPDD_SPV_CKV_US * EPDD_TICKS_PER_US));
+	/* the shift register write is much shorter than the CKV high time */
 	ctl_set(ee, LWS_EPDD_CTL_STV, 0);
 
-	for (n = 0; n < ee->frame_lead_ckv; n++)
-		ckv_pulse(st, sym);
+	for (n = 0; n < ee->frame_lead_ckv; n++) {
+		if (n + 1 == ee->frame_lead_ckv) {
+			ckv_wait(st);
+			ctl_set(ee, LWS_EPDD_CTL_OE, 1);
+			ckv_pulse(st, ckv_sym(EPDD_TICKS_PER_US,
+					      EPDD_TICKS_PER_US));
+		} else
+			ckv_pulse(st, ckv_sym(1, EPDD_SPV_CKV_US *
+						 EPDD_TICKS_PER_US));
+	}
 
-	ckv_wait(st);
-	ctl_set(ee, LWS_EPDD_CTL_OE, 1);
+	if (!ee->frame_lead_ckv) {
+		ckv_wait(st);
+		ctl_set(ee, LWS_EPDD_CTL_OE, 1);
+	}
 }
 
 void IRAM_ATTR
