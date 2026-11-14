@@ -9,25 +9,24 @@
  * A 960 x 540 E Ink ED047TC1 panel with no controller of its own: we drive its
  * source and gate drivers directly, with lws-epd-direct.h.
  *
- * There are three ways the panel signals can be routed, chosen by
+ * There are two ways the panel signals can be routed, chosen by
  * T547_ROUTING:
  *
- *  - T547_ROUTING_V23: the LilyGo board, V2.3.  XLE, SPV, XOE, MODE1, the
- *    panel supply enables and the board's power hold are on a 74HCT4094
- *    shift register.
- *
- *  - T547_ROUTING_V24: the LilyGo board, V2.4.  As V2.3, except XLE and SPV
- *    have their own gpios.
+ *  - T547_ROUTING_LILYGO: the LilyGo T5 4.7" S3 board (V2.4 is the current
+ *    one).  XLE, SPV, XOE, MODE1, the panel supply enables and the scan
+ *    direction are on a 74HCT4094 shift register, as LilyGo's own code for
+ *    the board has them.
  *
  *  - T547_ROUTING_WATCH: no panel at all, but a Waveshare
  *    ESP32-S3-Touch-LCD-1.28 (ESP32-S3R2, 2MB quad PSRAM), with the signals
  *    on gpios it doesn't use, so the timing and the driver can be checked on
  *    a scope without a panel.  The signals worth watching are on its
- *    12-pin GPIO_OUT header.  It's laid out like V2.4.
+ *    12-pin GPIO_OUT header.  XLE and SPV are on gpios of their own, so
+ *    they can be seen on the scope.
  *
- * V2.4 is the default.  sdkconfig is for the LilyGo boards' 8MB octal
- * PSRAM; the watch routing needs it changed for the watch's 2MB quad PSRAM,
- * see the README.
+ * The LilyGo board is the default.  sdkconfig is for its 8MB octal PSRAM;
+ * the watch routing needs it changed for the watch's 2MB quad PSRAM, see
+ * the README.
  *
  * On the LilyGo boards, there's a GT911 touch panel over the display, on
  * its own i2c bus.  The watch's gpios for that are used for the panel
@@ -38,11 +37,10 @@
 #include "../../main.h"
 
 #define T547_ROUTING_WATCH	0
-#define T547_ROUTING_V23	1
-#define T547_ROUTING_V24	2
+#define T547_ROUTING_LILYGO	1
 
 #if !defined(T547_ROUTING)
-#define T547_ROUTING		T547_ROUTING_V24
+#define T547_ROUTING		T547_ROUTING_LILYGO
 #endif
 
 /*
@@ -158,8 +156,8 @@ static const lws_epd_direct_esp32_step_t power_on[] = {
  * The 74HCT4094 outputs on the LilyGo boards.  QP7 is the end of the shift
  * register the first bit shifted in reaches.
  *
- *	QP0	XLE (V2.3)	QP4	SPV (V2.3), active low
- *	QP1	LT1945 SHDN	QP5	board power hold, keep high
+ *	QP0	XLE		QP4	SPV, active low
+ *	QP1	LT1945 SHDN	QP5	scan direction, keep high
  *	QP2	VPOS enable	QP6	MODE1
  *	QP3	VNEG enable	QP7	XOE
  */
@@ -243,7 +241,7 @@ static const lws_epd_direct_esp32_t epd_bus = {
 
 #else
 
-	/* LilyGo T5 4.7" S3, V2.3 and V2.4 */
+	/* LilyGo T5 4.7" S3; GPIO45 and GPIO48 aren't connected on V2.4 */
 
 	.data_gpio			= { 8, 1, 2, 3, 4, 5, 6, 7 },
 	.xcl_gpio			= 41,
@@ -253,13 +251,8 @@ static const lws_epd_direct_esp32_t epd_bus = {
 	.sr_clk_gpio			= 12,
 	.sr_str_gpio			= 0,
 	.ctl = {
-#if T547_ROUTING == T547_ROUTING_V24
-		[LWS_EPDD_CTL_LE]	= GPIO(48),
-		[LWS_EPDD_CTL_STV]	= GPIO_LOW(45),
-#else
 		[LWS_EPDD_CTL_LE]	= SR(0),
 		[LWS_EPDD_CTL_STV]	= SR_LOW(4),
-#endif
 		[LWS_EPDD_CTL_OE]	= SR(7),
 		[LWS_EPDD_CTL_MODE]	= SR(6),
 		[LWS_EPDD_CTL_RAIL0]	= SR_LOW(1),

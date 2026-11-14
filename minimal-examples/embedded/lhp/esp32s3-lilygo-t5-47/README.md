@@ -1,6 +1,6 @@
 # lhp on the LilyGo T5 4.7" e-paper, ESP32-S3
 
-The LilyGo T5 4.7" (V2.3 / V2.4, ESP32-S3 N16R8) has a 960 x 540 E Ink
+The LilyGo T5 4.7" S3 (V2.4, ESP32-S3 N16R8) has a 960 x 540 E Ink
 ED047TC1 panel with no controller of its own.  This example drives it with
 the generic directly-driven EPD support, `lws-epd-direct.h`, and its ESP32
 transport, `lws-esp32-epd-direct.h`: the panel's source driver data bus is
@@ -11,17 +11,13 @@ It's black and white only for now.
 
 ## Choosing the IO routing
 
-`main/devices.c` describes three ways the panel signals can be routed,
+`main/devices.c` describes two ways the panel signals can be routed,
 selected by `T547_ROUTING` near the top of the file:
 
 Routing|What it is
 ---|---
 `T547_ROUTING_WATCH`|No panel: a Waveshare ESP32-S3-Touch-LCD-1.28, with the signals put on gpios it doesn't use, to check the driver and its timing on a scope
-`T547_ROUTING_V23`|The LilyGo V2.3 board.  XLE, SPV, XOE, MODE1, the supply enables and the board power hold are on the 4094
-`T547_ROUTING_V24` (default)|The LilyGo V2.4 board.  As V2.3, but XLE is on GPIO48 and SPV on GPIO45
-
-V2.4 is the default.  If your board is V2.3, as printed on its silkscreen,
-set `T547_ROUTING` to `T547_ROUTING_V23` in `main/devices.c`.
+`T547_ROUTING_LILYGO` (default)|The LilyGo board.  XLE, SPV, XOE, MODE1, the supply enables and the scan direction are on the 4094, as in LilyGo's own code for it
 
 ### Watch routing signals
 
@@ -79,7 +75,8 @@ versions.
 XCL runs at 20MHz, the panel's typical rate.  A row then takes about 12us to
 send, but the next row can't be latched until the previous row's 20us CKV
 drive has ended, so rows come every 21.5 - 22us, about 12ms per pass.  On
-V2.3, XLE is on the 4094, so each row also costs two shift register writes.
+the LilyGo board, XLE is on the 4094, so each row also costs two shift
+register writes.
 
 The panel allows at most 85 passes a second, so a pass takes at least 11.8ms
 however few rows change.  The waveforms in `main/devices.c` give pixels
@@ -158,8 +155,7 @@ code, and need checking on a real board:
  - the gate start sequence: SPV, then one CKV clock, then
    `.frame_lead_ckv` more before the first row, which is 0 here
 
- - which 4094 output is which, see the table in `main/devices.c`, and the
-   V2.4 gpios for XLE and SPV
+ - which 4094 output is which, see the table in `main/devices.c`
 
  - the power sequencing delays
 
@@ -169,5 +165,5 @@ code, and need checking on a real board:
  - the touch panel's resolution and orientation, `.wh_native` and `.flags`
    in `main/devices.c`, and that its INT, configured in the chip, works
    with a falling edge.  These follow LilyGo's example code, which is for
-   the S3 boards generally; it's not checked yet against the V2.3 or V2.4
+   the S3 boards generally; it's not checked yet against the V2.4
    schematic
