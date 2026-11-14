@@ -111,8 +111,8 @@ relayout_browse(lws_sorted_usec_list_t *sul)
 		 rs->lds->current_url);
 
 	memset(&box, 0, sizeof(box));
-	box.w = rs->lds->disp->ic.wh_px[0];
-	rs->lds->disp->blit(rs->lds, NULL, &box, NULL);
+	box.w = rs->lds->ic.wh_px[0];
+	lws_display_blit(rs->lds, NULL, &box, NULL);
 	lhp_demo_phase(LWS_LHPCD_PHASE_IDLE);
 }
 
@@ -189,7 +189,7 @@ render(lws_sorted_usec_list_t *sul)
 {
 	lws_display_render_state_t *rs = lws_container_of(sul,
 					lws_display_render_state_t, sul);
-	const lws_surface_info_t *dic = &rs->lds->disp->ic;
+	const lws_surface_info_t *dic = &rs->lds->ic;
 	lws_stateful_ret_t r;
 	lws_usec_t t0, t1;
 	lws_box_t box;
@@ -273,7 +273,7 @@ render(lws_sorted_usec_list_t *sul)
 		box.w = dic->wh_px[0];
 		box.h = dic->wh_px[1];
 
-		rs->lds->disp->blit(rs->lds, (uint8_t *)rs, &box, NULL);
+		lws_display_blit(rs->lds, (uint8_t *)rs, &box, NULL);
 
 		lhp_demo_phase(LWS_LHPCD_PHASE_RENDERING);
 
@@ -312,7 +312,7 @@ render(lws_sorted_usec_list_t *sul)
 			memset(rs->line, 0xff, lb);
 
 		box.y.whole = frame_y++;
-		rs->lds->disp->blit(rs->lds, (uint8_t *)rs->line, &box,
+		lws_display_blit(rs->lds, (uint8_t *)rs->line, &box,
 				    NULL);
 	}
 
@@ -354,7 +354,7 @@ render(lws_sorted_usec_list_t *sul)
 		 * convert to the panel's packed format and deal with diffusion
 		 */
 
-		rs->lds->disp->blit(rs->lds, (uint8_t *)rs->line, &box, NULL);
+		lws_display_blit(rs->lds, (uint8_t *)rs->line, &box, NULL);
 		upd.blit += lws_now_usecs() - t1;
 
 		rs->curr++;
@@ -368,7 +368,7 @@ render(lws_sorted_usec_list_t *sul)
 		    (int)(upd.blit / LWS_US_PER_MS), upd.wakes);
 	/* zero-height blit indicates update finished */
 	box.h.whole = 0;
-	rs->lds->disp->blit(rs->lds, (uint8_t *)rs->line, &box, NULL);
+	lws_display_blit(rs->lds, (uint8_t *)rs->line, &box, NULL);
 
 	line_free(rs);
 	redraw = 0;
@@ -394,7 +394,7 @@ render_band(lws_sorted_usec_list_t *sul)
 {
 	lws_display_render_state_t *rs = lws_container_of(sul,
 					lws_display_render_state_t, sul);
-	const lws_surface_info_t *dic = &rs->lds->disp->ic;
+	const lws_surface_info_t *dic = &rs->lds->ic;
 	size_t lb = (size_t)dic->wh_px[0].whole * (dic->greyscale ? 1 : 3);
 	lws_stateful_ret_t r;
 	lws_usec_t t0, t1;
@@ -442,17 +442,17 @@ render_band(lws_sorted_usec_list_t *sul)
 	box.w = dic->wh_px[0];
 	box.y.whole = band_y + frame_top;
 	box.h.whole = band_h;
-	rs->lds->disp->blit(rs->lds, (uint8_t *)rs, &box, NULL);
+	lws_display_blit(rs->lds, (uint8_t *)rs, &box, NULL);
 
 	box.h.whole = 1;
 	for (y = 0; y < band_h; y++) {
 		box.y.whole = band_y + frame_top + y;
-		rs->lds->disp->blit(rs->lds, band + (size_t)y * lb, &box,
+		lws_display_blit(rs->lds, band + (size_t)y * lb, &box,
 				    NULL);
 	}
 
 	box.h.whole = 0;
-	rs->lds->disp->blit(rs->lds, band, &box, NULL);
+	lws_display_blit(rs->lds, band, &box, NULL);
 	upd.blit = lws_now_usecs() - t1;
 
 	lwsl_info("%s: %d lines in %dms: drawing %dms, blitting %dms, "
@@ -522,7 +522,7 @@ init_browse(struct lws_context *cx, lws_display_render_state_t *rs,
 	framed = (char)(frame && sui);
 	frame_top = 0;
 	rs->ic = framed ? lws_dlo_ui_frame_body(sui, &frame_top) :
-			  &lds.disp->ic;
+			  &lds.ic;
 
 	/*
 	 * With a touch panel, the page can be dragged around on the display:
@@ -580,7 +580,7 @@ redraw_page(lws_display_render_state_t *rs)
 int
 redraw_damage(lws_display_render_state_t *rs)
 {
-	const lws_surface_info_t *dic = &rs->lds->disp->ic;
+	const lws_surface_info_t *dic = &rs->lds->ic;
 	lws_box_t b;
 
 	if (rs->html != 2 || !rs->retained || rs->line || redraw ||

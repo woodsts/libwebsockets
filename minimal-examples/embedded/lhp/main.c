@@ -748,7 +748,7 @@ update_show(void)
 	if (!html)
 		return;
 
-	len = lhp_update_html(html, 2048, &lds.disp->ic,
+	len = lhp_update_html(html, 2048, &lds.ic,
 #if defined(LWS_WITH_OTA)
 			      lws_ota_variant_name(),
 #else
@@ -1241,7 +1241,9 @@ touch_press(const void *buf, size_t len)
 		return;
 
 	if (json_coord(buf, len, "\"x\":", &x) ||
-	    json_coord(buf, len, "\"y\":", &y))
+	    json_coord(buf, len, "\"y\":", &y) ||
+	    /* it's on the surface, the page is on what can be seen of it */
+	    lws_display_visible_xy(&lds, &x, &y))
 		return;
 
 	/* the page is below the frame's title strip */
@@ -1540,6 +1542,7 @@ teardown(uint32_t heap_before)
 
 	lws_display_state_off(&lds);
 	deinit_plat_devices(cx);
+	lws_display_state_fini(&lds);
 
 	lws_context_destroy(cx);
 	cx = NULL;
