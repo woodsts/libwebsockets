@@ -434,17 +434,22 @@ render(lws_sorted_usec_list_t *sul)
 			finish(1);
 			return;
 		}
+		memset(rs->line, 0xff, lbuflen);
 		rs->curr = 0;
 	}
 
 	while (rs->curr != rs->ic->wh_px[1].whole) {
 
 		sample(rs->curr);
-		memset(rs->line, 0xff, lbuflen);
 
 		r = lws_display_list_render_line(rs);
 		if (r) {
-			/* waiting for more of an image: its rx wakes us */
+			/*
+			 * Waiting for more of an image: its rx wakes us.  The
+			 * walk carries on along this line from the dlo that
+			 * stopped it, so what the ones before it drew must
+			 * stay: the line is only cleared once it is finished
+			 */
 			if (r & LWS_SRET_YIELD)
 				lws_sul_schedule(cx, 0, &rs->sul, render,
 						 20 * LWS_US_PER_MS);
@@ -469,6 +474,7 @@ render(lws_sorted_usec_list_t *sul)
 		}
 
 		rs->curr++;
+		memset(rs->line, 0xff, lbuflen);
 	}
 
 	sample(rs->curr);
