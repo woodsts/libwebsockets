@@ -61,7 +61,9 @@ generic driver `epd-direct.c`, panel descriptions from their datasheets in
 Updates are differential: only pixels that change are driven, wherever they
 are on the panel, and several updates can be in flight at once, so a later
 one doesn't wait for an earlier one to finish.  The panel is cleared at
-start and, optionally, every `.full_refresh_every` updates.
+start, optionally every `.full_refresh_every` updates, and before the next
+update after the display's `.clear` op is called, eg, when what's shown is
+replaced by a different page.
 
 By default the passes are run from the lws event loop.  Panels need passes
 to follow each other without gaps, so a platform can instead give

@@ -158,6 +158,12 @@ typedef struct lws_display {
 	int (*blit)(struct lws_display_state *lds, const uint8_t *src,
 		    lws_box_t *box, lws_dll2_owner_t *ids);
 	int (*power)(struct lws_display_state *lds, int state);
+	int (*clear)(struct lws_display_state *lds);
+	/**< NULL, or the next update is to start with the display cleared,
+	 * eg, an EPD's flashing refresh, that takes away what updates of only
+	 * the pixels that change leave behind.  For when what's shown is
+	 * replaced, eg, by a different page.  Displays that do that with every
+	 * update anyway don't need it */
 
 	const lws_led_sequence_def_t	*bl_active;
 	const lws_led_sequence_def_t	*bl_dim;

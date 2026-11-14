@@ -278,6 +278,8 @@ lws_display_epd_direct_blit(lws_display_state_t *lds, const uint8_t *src,
 			    lws_box_t *box, lws_dll2_owner_t *ids);
 LWS_VISIBLE LWS_EXTERN int
 lws_display_epd_direct_power(lws_display_state_t *lds, int state);
+LWS_VISIBLE LWS_EXTERN int
+lws_display_epd_direct_clear(lws_display_state_t *lds);
 
 /**
  * lws_display_epd_direct_service() - run what's due on the panel
@@ -309,6 +311,7 @@ lws_display_epd_direct_destroy(lws_display_state_t *lds);
 	.init = lws_display_epd_direct_init, \
 	.blit = lws_display_epd_direct_blit, \
 	.power = lws_display_epd_direct_power, \
+	.clear = lws_display_epd_direct_clear, \
 	.bistable = 1
 
 #endif

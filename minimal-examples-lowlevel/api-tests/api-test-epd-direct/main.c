@@ -26,6 +26,8 @@
  *  - a pixel changed back while it's still moving finishes moving, then
  *    moves back
  *  - a full refresh clears the panel every so many updates
+ *  - asked to, the next update committed starts with a clear, and only that
+ *    one
  *  - rows are driven for the clear's drive time in its passes, and the
  *    updates' in theirs
  *  - a line blitted without pixels is white
@@ -870,6 +872,56 @@ test_full_refresh(void)
 	disp.full_refresh_every = 0;
 }
 
+/* the clear's passes since pass p0 */
+
+static int
+clear_passes(int p0)
+{
+	int p, c = 0;
+
+	for (p = p0; p < sim.passes && p < MAX_PASSES; p++)
+		c += sim.drive_ns[p] == CLEAR_DRIVE_NS;
+
+	return c;
+}
+
+static void
+test_clear(void)
+{
+	int p0, c;
+
+	lwsl_user("%s\n", __func__);
+
+	/*
+	 * Asked for a clear, the next update to be committed starts with one,
+	 * and the panel ends up showing that update
+	 */
+
+	check(disp.disp.clear && !disp.disp.clear(&lds), "clear failed\n");
+
+	p0 = sim.passes;
+	c = cb2;
+	set_rect(0, 0, 30, H, 0);
+	blit_all();
+	commit();
+	service_until(&cb2, c + 1);
+	check_panel("clear");
+	check(clear_passes(p0) == (int)LWS_ARRAY_SIZE(clear),
+	      "%d passes drove for the clear's time\n", clear_passes(p0));
+
+	/* only that one */
+
+	p0 = sim.passes;
+	c = cb2;
+	set_rect(0, 0, 30, H, 1);
+	blit_all();
+	commit();
+	service_until(&cb2, c + 1);
+	check_panel("after clear");
+	check(!clear_passes(p0), "%d clear passes after the clear\n",
+	      clear_passes(p0));
+}
+
 /*
  * Being bistable, the panel only shows something animated if the display says
  * how often it can usefully be updated for it, and then no more often than
@@ -919,6 +971,7 @@ run_tests(const lws_epd_direct_runner_t *runner)
 	test_collision();
 	test_null_line();
 	test_full_refresh();
+	test_clear();
 
 	service_until(&sim.power_offs, aget(&sim.power_ons));
 	check(!aget(&sim.powered), "still powered at the end\n");

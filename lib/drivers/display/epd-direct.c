@@ -248,6 +248,8 @@ typedef struct epdd_priv {
 	/**< the clear after init finished, we haven't said so yet */
 	uint8_t			committed:1;
 	/**< an update was committed and we haven't said it finished */
+	uint8_t			clear_next:1;
+	/**< the next update to be committed starts with a clear */
 } epdd_priv_t;
 
 #define lds_to_disp(_lds) ((const lws_display_epd_direct_t *)(_lds)->disp)
@@ -1392,9 +1394,10 @@ lws_display_epd_direct_blit(lws_display_state_t *lds, const uint8_t *src,
 		priv->committed = 1;
 		if (!priv->st_commit)
 			priv->st_commit = lws_now_usecs();
-		if (ed->full_refresh_every &&
-		    ++priv->updates >= ed->full_refresh_every)
+		if (priv->clear_next || (ed->full_refresh_every &&
+		    ++priv->updates >= ed->full_refresh_every))
 			priv->full_pending = 1;
+		priv->clear_next = 0;
 		epdd_start(priv);
 		epdd_check_idle(priv);
 		if (slots_idle(priv))
@@ -1434,6 +1437,23 @@ lws_display_epd_direct_power(lws_display_state_t *lds, int state)
 		epdd_set(&priv->power_off_req, 1);
 		epdd_kick(priv);
 	}
+
+	return 0;
+}
+
+int
+lws_display_epd_direct_clear(lws_display_state_t *lds)
+{
+	epdd_priv_t *priv = lds_to_priv(lds);
+
+	if (!priv)
+		return 1;
+
+	/*
+	 * Not now: what's wanted is the last update until the next one has
+	 * all its lines, and the clear would show it again
+	 */
+	priv->clear_next = 1;
 
 	return 0;
 }
