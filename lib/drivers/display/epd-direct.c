@@ -931,9 +931,16 @@ epdd_stats(epdd_priv_t *priv)
 	if (!epdd_get(&priv->rst_ready))
 		return;
 
-#if (_LWS_ENABLED_LOGS & LLL_INFO)
+#if (_LWS_ENABLED_LOGS & (LLL_INFO | LLL_NOTICE))
+	/*
+	 * Updates come often, eg, each frame of an animation, but clears are
+	 * rare: the one at boot, and each .full_refresh_every updates.  They
+	 * are logged where they can be seen by default, so it's clear the
+	 * panel is being driven, and how fast.
+	 */
 	if (r->passes)
-		lwsl_info("%s: %u passes in %dms, scans %d / %d / %dus "
+		_lws_log(priv->st_clears ? LLL_NOTICE : LLL_INFO,
+			    "%s: %u passes in %dms, scans %d / %d / %dus "
 			    "(min / avg / max); rows %u driven, %u skipped, "
 			    "%u latched none; px %u to black, %u to white; "
 			    "%u updates, %u clears; settled %dms after "
@@ -989,7 +996,7 @@ epdd_check_idle(epdd_priv_t *priv)
 
 	if (priv->booted) {
 		priv->booted = 0;
-		lwsl_info("%s: panel cleared\n", __func__);
+		lwsl_notice("%s: panel cleared\n", __func__);
 		if (ed->cb)
 			ed->cb(priv->lds, 1);
 	}
