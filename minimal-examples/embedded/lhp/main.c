@@ -796,6 +796,13 @@ app_next(lws_sorted_usec_list_t *sul)
 	lwsl_notice("%s: %s\n", __func__, carousel_urls[carousel]);
 
 	page_drop();
+	/*
+	 * A different page: a display that can, eg, an EPD that only changes
+	 * the pixels that differ, is cleared first, so nothing is left behind
+	 * from the last one
+	 */
+	if (lds.disp->clear)
+		lds.disp->clear(&lds);
 	/* whether the frame was drawn before the first page or not */
 	handover = 0;
 	page_no = carousel + 1;
@@ -876,6 +883,8 @@ app_last_shown(lws_sorted_usec_list_t *sul)
 	memcpy(html, blank, sizeof(blank));
 
 	lwsl_notice("%s: leaving the display white\n", __func__);
+	if (lds.disp->clear)
+		lds.disp->clear(&lds);
 	/* all of it, the frame too */
 	sui_drop();
 	carousel_phase = CAROUSEL_BLANKING;

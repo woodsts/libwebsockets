@@ -352,6 +352,7 @@ static const lws_display_epd_direct_t disp = {
 		.init			= lws_display_epd_direct_init,
 		.blit			= scope_pattern_blit,
 		.power			= lws_display_epd_direct_power,
+		.clear			= lws_display_epd_direct_clear,
 		.bistable		= 1,
 #else
 		lws_display_epd_direct_ops,

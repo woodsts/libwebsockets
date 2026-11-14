@@ -249,6 +249,12 @@ says it's `bistable` in its `lws_display_t`, as the EPD drivers do, a white
 page is shown after the last page, and it ends once that is on the display.
 On other displays, the display is turned off as it ends.
 
+A display that only changes the pixels that differ, eg, a directly-driven
+EPD, can leave a trace of what it showed before.  If its `lws_display_t` has
+a `.clear` op, it's called as each carousel page starts and before the white
+page at the end, so that update starts with the display cleared, eg, an
+EPD's flashing refresh.
+
 Ending tears everything down, the devices in `deinit_plat_devices()`, then
 the lws context, and logs the free heap from before the context was created
 and after it was destroyed, and the low water mark of the free heap.  If the
