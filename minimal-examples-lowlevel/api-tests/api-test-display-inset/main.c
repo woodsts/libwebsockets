@@ -1,0 +1,252 @@
+/*
+ * lws-api-test-display-inset
+ *
+ * Written in 2010-2026 by Andy Green <andy@warmcat.com>
+ *
+ * This file is made available under the Creative Commons CC0 1.0
+ * Universal Public Domain Dedication.
+ *
+ * Tests a display's inset, the px at its edges that can't be seen, eg, under
+ * a bezel or a touch panel's mask.  Against a pretend display that keeps
+ * what it's blitted, it checks
+ *
+ *  - the display state's surface, what to lay out and draw on, is the part
+ *    inside the inset, with its size in mm what that part is
+ *
+ *  - an update drawn on that, blitted with lws_display_blit(), reaches the
+ *    display as lines of its whole surface where they belong, with the inset
+ *    at their sides white
+ *
+ *  - a point on the surface, eg, a touch, is where it is on what can be
+ *    seen, and one in the inset is said to be outside it
+ *
+ *  - an inset leaving nothing to see is refused
+ *
+ *  - with no inset, what's blitted goes straight to the display
+ */
+
+#include <libwebsockets.h>
+#include <string.h>
+
+#define W	20
+#define H	10
+
+static int fail;
+/* the pretend display's surface, Y */
+static uint8_t fb[H][W];
+static int starts, ends, lines;
+static lws_box_t start_box;
+static const uint8_t *last_src;
+
+#define check(_c, ...) do { if (!(_c)) { \
+		lwsl_err("%s:%d: %s\n", __func__, __LINE__, #_c); \
+		lwsl_err(__VA_ARGS__); fail = 1; } } while (0)
+
+static int
+pretend_init(lws_display_state_t *lds)
+{
+	(void)lds;
+
+	return 0;
+}
+
+static int
+pretend_blit(lws_display_state_t *lds, const uint8_t *src, lws_box_t *box,
+	     lws_dll2_owner_t *ids)
+{
+	(void)lds;
+	(void)ids;
+
+	switch (box->h.whole) {
+	case 0:
+		ends++;
+		break;
+	case 1:
+		check(box->x.whole == 0 && box->w.whole == W,
+		      "line %d,%d w %d, not all the surface\n",
+		      (int)box->x.whole, (int)box->y.whole,
+		      (int)box->w.whole);
+		check(box->y.whole >= 0 && box->y.whole < H,
+		      "line %d off the surface\n", (int)box->y.whole);
+		if (box->y.whole >= 0 && box->y.whole < H) {
+			if (src)
+				memcpy(fb[box->y.whole], src, W);
+			else
+				memset(fb[box->y.whole], 0xff, W);
+		}
+		last_src = src;
+		lines++;
+		break;
+	default:
+		starts++;
+		start_box = *box;
+		break;
+	}
+
+	return 0;
+}
+
+static const lws_display_t disp = {
+	.init			= pretend_init,
+	.blit			= pretend_blit,
+	.name			= "pretend",
+	.ic = {
+		.wh_px		= { { W, 0 }, { H, 0 } },
+		.wh_mm		= { { 40, 0 }, { 20, 0 } },
+		.type		= LWSSURF_PALETTE,
+		.greyscale	= 1,
+	},
+	/* left, top, right, bottom */
+	.inset			= { 2, 1, 3, 2 },
+};
+
+/* an update of all of what can be seen, black */
+
+static void
+draw_black(lws_display_state_t *lds)
+{
+	uint8_t line[W];
+	lws_box_t box;
+	int y;
+
+	memset(line, 0, sizeof(line));
+	memset(&box, 0, sizeof(box));
+	box.w = lds->ic.wh_px[0];
+	box.h = lds->ic.wh_px[1];
+	lws_display_blit(lds, (uint8_t *)lds, &box, NULL);
+
+	box.h.whole = 1;
+	for (y = 0; y < lds->ic.wh_px[1].whole; y++) {
+		box.y.whole = y;
+		lws_display_blit(lds, line, &box, NULL);
+	}
+
+	box.h.whole = 0;
+	lws_display_blit(lds, NULL, &box, NULL);
+}
+
+static void
+test_inset(struct lws_context *cx)
+{
+	static const uint8_t nothing[4] = { 10, 0, 10, 0 };
+	lws_display_state_t lds;
+	int x, y, bad = 0, in;
+
+	lws_display_state_init(&lds, cx, -1, -1, NULL, &disp);
+
+	/* what to lay out on is what's inside the inset */
+
+	check(lds.ic.wh_px[0].whole == W - 5 && lds.ic.wh_px[1].whole == H - 3,
+	      "visible %d x %d\n", (int)lds.ic.wh_px[0].whole,
+	      (int)lds.ic.wh_px[1].whole);
+	/* 15 / 20 of 40mm, 7 / 10 of 20mm */
+	check(lds.ic.wh_mm[0].whole == 30 && lds.ic.wh_mm[1].whole == 14,
+	      "visible %d x %d mm\n", (int)lds.ic.wh_mm[0].whole,
+	      (int)lds.ic.wh_mm[1].whole);
+
+	/* drawn on that, it lands inside the inset, which stays white */
+
+	memset(fb, 0x80, sizeof(fb));
+	draw_black(&lds);
+
+	check(starts == 1 && ends == 1 && lines == H - 3,
+	      "%d starts, %d ends, %d lines\n", starts, ends, lines);
+	check(start_box.x.whole == 0 && start_box.y.whole == 1 &&
+	      start_box.w.whole == W && start_box.h.whole == H - 3,
+	      "start box %d,%d %dx%d\n", (int)start_box.x.whole,
+	      (int)start_box.y.whole, (int)start_box.w.whole,
+	      (int)start_box.h.whole);
+
+	for (y = 0; y < H; y++)
+		for (x = 0; x < W; x++) {
+			in = x >= 2 && x < W - 3 && y >= 1 && y < H - 2;
+			if (y < 1 || y >= H - 2) {
+				/* rows in the inset aren't blitted at all */
+				if (fb[y][x] != 0x80)
+					bad++;
+			} else if (fb[y][x] != (in ? 0 : 0xff))
+				bad++;
+		}
+	check(!bad, "%d px wrong\n", bad);
+
+	/* a touch on the surface is where it is on what can be seen */
+
+	x = 2;
+	y = 1;
+	check(!lws_display_visible_xy(&lds, &x, &y) && !x && !y,
+	      "top left %d,%d\n", x, y);
+	x = W - 4;
+	y = H - 3;
+	check(!lws_display_visible_xy(&lds, &x, &y) && x == W - 6 && y == H - 4,
+	      "bottom right %d,%d\n", x, y);
+	x = 1;
+	y = 5;
+	check(lws_display_visible_xy(&lds, &x, &y), "left inset visible\n");
+	x = 5;
+	y = H - 2;
+	check(lws_display_visible_xy(&lds, &x, &y), "bottom inset visible\n");
+
+	/* an inset with nothing inside it is refused, and changes nothing */
+
+	check(lws_display_set_inset(&lds, nothing), "nothing to see allowed\n");
+	check(lds.ic.wh_px[0].whole == W - 5 && lds.inset[0] == 2,
+	      "refused inset changed it\n");
+
+	lws_display_state_fini(&lds);
+	check(!lds.inset_line, "line not freed\n");
+}
+
+static void
+test_no_inset(struct lws_context *cx)
+{
+	static const uint8_t none[4];
+	lws_display_state_t lds;
+	uint8_t line[W];
+	lws_box_t box;
+
+	lws_display_state_init(&lds, cx, -1, -1, NULL, &disp);
+	check(!lws_display_set_inset(&lds, none), "no inset refused\n");
+	check(lds.ic.wh_px[0].whole == W && lds.ic.wh_px[1].whole == H,
+	      "visible %d x %d\n", (int)lds.ic.wh_px[0].whole,
+	      (int)lds.ic.wh_px[1].whole);
+
+	/* lines go to the display as they are */
+
+	memset(line, 0, sizeof(line));
+	memset(&box, 0, sizeof(box));
+	box.w.whole = W;
+	box.h.whole = 1;
+	box.y.whole = 3;
+	lws_display_blit(&lds, line, &box, NULL);
+	check(last_src == line, "line not passed on as it was\n");
+
+	lws_display_state_fini(&lds);
+}
+
+int
+main(int argc, const char **argv)
+{
+	struct lws_context_creation_info info;
+	struct lws_context *cx;
+
+	memset(&info, 0, sizeof(info));
+	lws_cmdline_option_handle_builtin(argc, argv, &info);
+	lwsl_user("LWS API Test - display inset\n");
+
+	info.port = CONTEXT_PORT_NO_LISTEN;
+
+	cx = lws_create_context(&info);
+	if (!cx) {
+		lwsl_err("context creation failed\n");
+		return 1;
+	}
+
+	test_inset(cx);
+	test_no_inset(cx);
+
+	lws_context_destroy(cx);
+
+	lwsl_user("Completed: %s\n", fail ? "FAIL" : "PASS");
+
+	return fail;
+}

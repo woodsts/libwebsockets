@@ -731,6 +731,8 @@ start(void)
 	settings_clicks = 0;
 	frame_redraws = 0;
 	lds.disp = &disp;
+	/* as lws_display_state_init() would */
+	lws_display_set_inset(&lds, disp.inset);
 	memset(fb, 0xff, sizeof(fb));
 
 	heap_before = lws_get_allocated_heap();
@@ -1265,6 +1267,8 @@ next_step(lws_sorted_usec_list_t *sul)
 		 */
 
 		lds.disp = &disp_whole;
+		/* as lws_display_state_init() would */
+		lws_display_set_inset(&lds, disp_whole.inset);
 		{
 			lws_dlo_ui_status_t st = { 1, 60, 1 };
 
@@ -1293,6 +1297,8 @@ next_step(lws_sorted_usec_list_t *sul)
 			return;
 		}
 		lds.disp = &disp;
+		/* as lws_display_state_init() would */
+		lws_display_set_inset(&lds, disp.inset);
 
 		/* the list takes the whole display back */
 
@@ -1649,6 +1655,8 @@ main(int argc, const char **argv)
 
 	memset(&lds, 0, sizeof(lds));
 	lds.disp = &disp;
+	/* as lws_display_state_init() would */
+	lws_display_set_inset(&lds, disp.inset);
 	lds.ctx = cx;
 
 	if (start()) {

@@ -381,7 +381,7 @@ ui_span(const struct lws_dlo_ui *ui, int y0, int y1, int *x0, int *x1)
 	if (y1 > ui->h)
 		y1 = ui->h;
 
-	if (lws_surface_visible_span(&ui->i.lds->disp->ic, y0, y1, x0, x1))
+	if (lws_surface_visible_span(&ui->i.lds->ic, y0, y1, x0, x1))
 		*x0 = *x1 = 0;
 }
 
@@ -491,7 +491,7 @@ ui_title_span(const struct lws_dlo_ui *ui, int *x0, int *x1)
 static void
 ui_panel_geom(const struct lws_dlo_ui *ui, int *x0, int *x1, int *vh)
 {
-	int y1 = ui->i.lds->disp->ic.round ? ui->h - ui->title_h : ui->h;
+	int y1 = ui->i.lds->ic.round ? ui->h - ui->title_h : ui->h;
 
 	ui_span(ui, ui->title_h, y1, x0, x1);
 	*x0 += ui->pad;
@@ -612,7 +612,7 @@ ui_clamp_kb(struct lws_dlo_ui *ui)
 	} else
 		ui->kx = (ui->w - kw) / 2;
 
-	m = ui->i.lds->disp->ic.round ? sh / 2 + ui->row_h / 2 - kh :
+	m = ui->i.lds->ic.round ? sh / 2 + ui->row_h / 2 - kh :
 					sh - kh;
 	if (m > 0)
 		m = 0;
@@ -887,7 +887,7 @@ ui_html(struct lws_dlo_ui *ui, char *buf, size_t len)
 {
 	int lh = ui->h - ui->title_h, tl = (ui->fs_title * 6) / 5,
 	    x0, x1, y0, n, first, last, ry, ix0,
-	    ix1, round = ui->i.lds->disp->ic.round;
+	    ix1, round = ui->i.lds->ic.round;
 	lws_dlo_ui_row_t row;
 	lws_html_w_t w;
 
@@ -1119,7 +1119,7 @@ ui_layout(struct lws_dlo_ui *ui)
 	memset(ui->rs.st, 0, sizeof(ui->rs.st));
 	ui->rs.sp = 0;
 	ui->rs.curr = 0;
-	ui->rs.ic = &ui->i.lds->disp->ic;
+	ui->rs.ic = &ui->i.lds->ic;
 	ui->rs.lds = ui->i.lds;
 	/*
 	 * The panel's content can be taller than the display: it's laid out
@@ -1340,7 +1340,7 @@ ui_dialog_press(struct lws_dlo_ui *ui, int idx)
 static int
 ui_scan_start(struct lws_dlo_ui *ui)
 {
-	const lws_surface_info_t *ic = &ui->i.lds->disp->ic;
+	const lws_surface_info_t *ic = &ui->i.lds->ic;
 	size_t lw = (size_t)ui->w * (ic->greyscale ? 1 : 3);
 	int s, y0, y1, b0 = ui->h, b1 = 0;
 	lws_box_t box;
@@ -1417,7 +1417,7 @@ ui_scan_start(struct lws_dlo_ui *ui)
 	box.w.whole = (int32_t)ui->w;
 	box.y.whole = ui->y0;
 	box.h.whole = ui->y1 - ui->y0;
-	ui->i.lds->disp->blit(ui->i.lds, (uint8_t *)&ui->rs, &box,
+	lws_display_blit(ui->i.lds, (uint8_t *)&ui->rs, &box,
 			      &ui->rs.ids);
 
 	return 0;
@@ -1439,7 +1439,7 @@ ui_scan_end(struct lws_dlo_ui *ui)
 
 	memset(&box, 0, sizeof(box));
 	box.w.whole = (int32_t)ui->w;
-	ui->i.lds->disp->blit(ui->i.lds, ui->line, &box, &ui->rs.ids);
+	lws_display_blit(ui->i.lds, ui->line, &box, &ui->rs.ids);
 
 	ui->rs.line = NULL;
 	lws_free_set_NULL(ui->line);
@@ -1528,7 +1528,7 @@ ui_render_step(struct lws_dlo_ui *ui)
 		}
 
 		box.y.whole = rs->curr;
-		ui->i.lds->disp->blit(ui->i.lds, rs->line, &box, &rs->ids);
+		lws_display_blit(ui->i.lds, rs->line, &box, &rs->ids);
 		rs->curr++;
 	}
 
@@ -1572,7 +1572,7 @@ ui_frame_kick(struct lws_dlo_ui *ui)
 	if (!ui->dirty || ui->i.lds->display_busy)
 		return;
 
-	if (ui->frame_full || disp->ic.band) {
+	if (ui->frame_full || ui->i.lds->ic.band) {
 		if (ui_scan_start(ui)) {
 			lwsl_err("%s: OOM\n", __func__);
 			ui->phase = UI_IDLE;
@@ -1639,7 +1639,7 @@ lws_dlo_ui_kick(struct lws_dlo_ui *ui)
 struct lws_dlo_ui *
 lws_dlo_ui_create(const lws_dlo_ui_info_t *info)
 {
-	const lws_surface_info_t *ic = &info->lds->disp->ic;
+	const lws_surface_info_t *ic = &info->lds->ic;
 	struct lws_dlo_ui *ui;
 
 	size_t cl = 0, n;
@@ -2253,6 +2253,8 @@ lws_dlo_ui_touch(struct lws_dlo_ui *ui, const void *buf, size_t len)
 	if (lws_json_simple_strcmp(buf, len, "\"type\":", "touch") ||
 	    ui_json_int(buf, len, "\"x\":", &x) ||
 	    ui_json_int(buf, len, "\"y\":", &y) ||
+	    /* touches are on the surface, we're on what can be seen of it */
+	    lws_display_visible_xy(ui->i.lds, &x, &y) ||
 	    x < 0 || x >= ui->w || y < 0 || y >= ui->h)
 		return 0;
 

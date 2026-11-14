@@ -193,6 +193,13 @@ typedef struct lws_display {
 	 * drawn, and one that is can't show animation at all, eg, an EPD
 	 * taking seconds for each update, so nothing animated should be put
 	 * on it.  See lws_display_anim_interval() */
+	uint8_t				inset[4];
+	/**< the px at the left, top, right and bottom edges of the surface
+	 * that can't be seen, eg, under a bezel or the mask of a touch panel
+	 * over it.  Things are laid out and drawn on the rest, the display
+	 * state's .ic, and lws_display_blit() puts them where they belong on
+	 * the surface.  It's what the state starts with, it can be changed
+	 * there with lws_display_set_inset() */
 } lws_display_t;
 
 /*
@@ -230,6 +237,15 @@ typedef struct lws_display_state {
 
 	char				display_busy;
 
+	lws_surface_info_t		ic;
+	/**< the part of the display's surface that can be seen, inside its
+	 * inset: what to lay things out and draw them on */
+	uint8_t				*inset_line;
+	/**< NULL, or a line of the whole surface, to blit a line drawn on
+	 * .ic from, with what's at its sides white */
+	uint8_t				inset[4];
+	/**< the inset in use, see lws_display_t .inset */
+
 } lws_display_state_t;
 
 /* Used for async display driver events, eg, EPD refresh completion */
@@ -257,6 +273,59 @@ LWS_VISIBLE LWS_EXTERN void
 lws_display_state_init(lws_display_state_t *lds, struct lws_context *ctx,
 		       int autodim_ms, int off_ms, struct lws_led_state *bl_lcs,
 		       const lws_display_t *disp);
+
+/**
+ * lws_display_state_fini() - free what the display state allocated
+ *
+ * \param lds: the display state object
+ *
+ * The display driver's own allocations are freed by the driver.
+ */
+LWS_VISIBLE LWS_EXTERN void
+lws_display_state_fini(lws_display_state_t *lds);
+
+/**
+ * lws_display_set_inset() - change which part of the surface can be seen
+ *
+ * \param lds: the display state object
+ * \param inset: px hidden at the left, top, right and bottom edges
+ *
+ * Sets lds->ic to the part of the surface inside \p inset, for what is laid
+ * out and drawn after it.  Returns 0, or nonzero if it would leave nothing to
+ * see, when nothing changes.
+ */
+LWS_VISIBLE LWS_EXTERN int
+lws_display_set_inset(lws_display_state_t *lds, const uint8_t inset[4]);
+
+/**
+ * lws_display_blit() - blit something drawn on the visible part of a display
+ *
+ * \param lds: the display state object
+ * \param src: what the display's blit takes for \p box
+ * \param box: where it is on lds->ic, what can be seen
+ * \param ids: as for the display's blit
+ *
+ * Like the display's .blit, but for things laid out and drawn on lds->ic,
+ * inside the display's inset.  Boxes are moved to where they are on the
+ * surface, and widened to all of it, and the lines given are put in a line
+ * of the whole surface with the inset at its sides white.  So the display's
+ * blit is given what it always is, lines of its whole surface.
+ */
+LWS_VISIBLE LWS_EXTERN int
+lws_display_blit(lws_display_state_t *lds, const uint8_t *src, lws_box_t *box,
+		 lws_dll2_owner_t *ids);
+
+/**
+ * lws_display_visible_xy() - where a point on the surface is on lds->ic
+ *
+ * \param lds: the display state object
+ * \param x: a surface x, eg, from a touch panel, changed to lds->ic's
+ * \param y: a surface y, changed to lds->ic's
+ *
+ * Returns 0, or nonzero if it's in the inset, outside what can be seen.
+ */
+LWS_VISIBLE LWS_EXTERN int
+lws_display_visible_xy(const lws_display_state_t *lds, int *x, int *y);
 
 /**
  * lws_display_state_set_brightness() - gradually change the brightness

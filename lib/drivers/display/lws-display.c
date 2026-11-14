@@ -86,7 +86,109 @@ lws_display_state_init(lws_display_state_t *lds, struct lws_context *ctx,
 		lws_led_transition(lds->bl_lcs, "backlight", &lws_pwmseq_static_off,
 						     &lws_pwmseq_static_on);
 
+	if (lws_display_set_inset(lds, disp->inset)) {
+		lwsl_err("%s: inset leaves nothing to see\n", __func__);
+		lds->ic = disp->ic;
+	}
+
 	disp->init(lds);
+}
+
+void
+lws_display_state_fini(lws_display_state_t *lds)
+{
+	lws_free_set_NULL(lds->inset_line);
+}
+
+/* how much of an extent in mm is left of it when only px of its whole are */
+
+static void
+inset_mm(lws_fx_t *mm, int whole, int px)
+{
+	lws_fx_t a, b, t;
+
+	a.whole = px;
+	a.frac = 0;
+	b.whole = whole;
+	b.frac = 0;
+	lws_fx_div(&t, &a, &b);
+	a = *mm;
+	lws_fx_mul(mm, &a, &t);
+}
+
+int
+lws_display_set_inset(lws_display_state_t *lds, const uint8_t inset[4])
+{
+	const lws_surface_info_t *sic = &lds->disp->ic;
+	int w = sic->wh_px[0].whole - inset[0] - inset[2],
+	    h = sic->wh_px[1].whole - inset[1] - inset[3];
+
+	if (w < 1 || h < 1)
+		return 1;
+
+	memcpy(lds->inset, inset, sizeof(lds->inset));
+
+	lds->ic = *sic;
+	lds->ic.wh_px[0].whole = w;
+	lds->ic.wh_px[0].frac = 0;
+	lds->ic.wh_px[1].whole = h;
+	lds->ic.wh_px[1].frac = 0;
+	inset_mm(&lds->ic.wh_mm[0], sic->wh_px[0].whole, w);
+	inset_mm(&lds->ic.wh_mm[1], sic->wh_px[1].whole, h);
+
+	/* what's at the sides of the line it keeps may be in the way now */
+	lws_free_set_NULL(lds->inset_line);
+
+	return 0;
+}
+
+int
+lws_display_blit(lws_display_state_t *lds, const uint8_t *src, lws_box_t *box,
+		 lws_dll2_owner_t *ids)
+{
+	const lws_surface_info_t *sic = &lds->disp->ic;
+	size_t bpp = sic->greyscale ? 1 : (sic->render_to_rgba ? 4 : 3);
+	lws_box_t b;
+
+	if (!(lds->inset[0] | lds->inset[1] | lds->inset[2] | lds->inset[3]))
+		return lds->disp->blit(lds, src, box, ids);
+
+	/* where it is on the surface, all the width of it */
+
+	b = *box;
+	b.y.whole += lds->inset[1];
+	if (b.h.whole) {
+		b.x.whole = 0;
+		b.x.frac = 0;
+		b.w = sic->wh_px[0];
+	}
+
+	if (b.h.whole == 1 && src && (lds->inset[0] || lds->inset[2])) {
+		/* a line drawn on what can be seen, inside a line of it all */
+		if (!lds->inset_line) {
+			lds->inset_line = lws_malloc((size_t)sic->wh_px[0].whole *
+						     bpp, __func__);
+			if (!lds->inset_line)
+				return 1;
+			memset(lds->inset_line, 0xff,
+			       (size_t)sic->wh_px[0].whole * bpp);
+		}
+		memcpy(lds->inset_line + (size_t)lds->inset[0] * bpp, src,
+		       (size_t)lds->ic.wh_px[0].whole * bpp);
+		src = lds->inset_line;
+	}
+
+	return lds->disp->blit(lds, src, &b, ids);
+}
+
+int
+lws_display_visible_xy(const lws_display_state_t *lds, int *x, int *y)
+{
+	*x -= lds->inset[0];
+	*y -= lds->inset[1];
+
+	return *x < 0 || *y < 0 || *x >= lds->ic.wh_px[0].whole ||
+	       *y >= lds->ic.wh_px[1].whole;
 }
 
 void

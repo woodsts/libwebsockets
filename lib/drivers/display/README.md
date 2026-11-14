@@ -35,6 +35,18 @@ display state to transition to ACTIVE smoothly, taking care of waking the displa
 and waiting out a display-specific wake period, and sequencing the backlight
 transition to active level as specified in the display structure.
 
+## Inset
+
+The edges of a display's surface may not all be seen, eg, under a bezel or
+the mask of a touch panel over it.  `.inset` in `lws_display_t` says how many
+px are hidden at the left, top, right and bottom.  The display state's `.ic`
+is the part inside that, what to lay things out and draw them on, and
+`lws_display_blit()` blits what was drawn on it where it belongs on the
+surface, so the display's own blit is still given lines of its whole surface.
+`lws_display_visible_xy()` gives where a point on the surface, eg, a touch,
+is on `.ic`.  The inset can be changed at runtime with
+`lws_display_set_inset()`, eg, while finding out what it should be.
+
 ## Animation
 
 Something animated on a display, eg, a spinner, is moved on by updating the
