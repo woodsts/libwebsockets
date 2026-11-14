@@ -194,6 +194,15 @@ lws_display_render_jpeg(struct lws_display_render_state *rs)
 #endif
 	}
 
+	/*
+	 * The walk calls on a dlo from the line before its top, so a fetch
+	 * started for the raster, eg above, gets that line's head start.
+	 * Nothing of the image is on that line though: what is drawn there
+	 * belongs to what's above it, as the gif and svg renderers leave it
+	 */
+	if (wl < 0)
+		return LWS_SRET_OK;
+
 	lws_reclaimable_pin(&dlo_jpeg->rc);
 	lws_reclaimable_touch(&dlo_jpeg->rc);
 	r = lws_display_render_jpeg_pinned(rs);
@@ -260,9 +269,7 @@ lws_display_render_jpeg_pinned(struct lws_display_render_state *rs)
 	 * The image row this sweep line wants, through the vertical scale:
 	 * a re-scanned viewport can start partway down an image, so discard
 	 * decoded rows until we reach it, exactly as the gif renderer
-	 * retargets.  The walk enters renderers from a line above a
-	 * fractional dlo top: a negative wl means "not reached the top row
-	 * yet", and must clamp to 0 rather than wrap
+	 * retargets.  Lines above its top never come here
 	 */
 
 	wanted = jpeg_row_wanted(dlo, dlo_jpeg, wl);

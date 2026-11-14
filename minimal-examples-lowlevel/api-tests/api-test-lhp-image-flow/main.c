@@ -205,7 +205,7 @@ sample(int curr)
 
 		/*
 		 * The raster calls on a dlo from the line before its top, so
-		 * the decoder may start from there
+		 * its fetch may start from there
 		 */
 		if (curr < im->top - 1) {
 			if (held > im->peak_before)
