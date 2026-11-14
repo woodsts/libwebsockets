@@ -3,6 +3,7 @@ idf_component_register(SRCS
 		../../boot-ui.c
 		../../settings-ui.c
 		../../update-ui.c
+		../../edges-ui.c
 		../../lhp-ss.c
 		devices.c
 		INCLUDE_DIRS "../libwebsockets/include;${IDF_PATH}/components/spi_flash/include;${IDF_PATH}/components/nvs_flash/include")

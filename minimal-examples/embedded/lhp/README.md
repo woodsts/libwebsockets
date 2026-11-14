@@ -168,6 +168,9 @@ can make a dialog of its own settings.  It has
 
  - "Hostname": the hostname, shaded like an editbox, which pressing edits
 
+ - "Display", on a touch display: "Edges and touch", which shows the edges
+   and touch page, see below
+
 How joining went, and the internet being reached, are noted by the netdev in
 the stored credentials, so they're known after a reboot.  Changing the
 passphrase forgets how joining went, but not that the internet was reached.
@@ -204,6 +207,35 @@ have a single `user` button, so for now only
 `esp32s3-waveshare-240-240-touch` can show the settings; a board given those
 buttons, and a `settings` one, in its `lws_button_map_t` needs no other
 changes.
+
+### Edges and touch
+
+The edges of a display may not all be seen, eg, under a bezel or the mask of
+a touch panel over it.  The display's inset (`lws_display_t .inset`, see
+`lib/drivers/display/README.md`) says how many px are hidden at each edge, and
+pages are laid out on what's inside it.  "Edges and touch" in the settings
+shows a page, made by `edges-ui.c`, for finding out what the inset should be
+on the device in hand, and for seeing if touches land where they are on the
+display.
+
+It's a 1px black line around the edges of what can be seen with the inset in
+use, and a row of controls for each edge: `-` and `+` make the inset there a
+px smaller or bigger, moving the line out or in, with how many px it is
+between them.  The inset is right when the line is just seen all the way
+round.  The page is laid out again with each change, on what can be seen then,
+and rows that went into the inset are made white.  Below the controls are the
+size of what can be seen, and where the last touch that wasn't on a control
+landed, on what can be seen and on the display's surface, or that it was in
+the inset; a cross marks it on the page.  If the cross isn't under where it
+was touched, it's the touch panel that isn't where the display is.  Reset
+goes back to the board's inset.
+
+Done stores the inset in the settings, as `lhp.inset`, and it's used instead
+of the board's from then on, including after a reboot.  Then what was shown
+before, the boot list or the page, is laid out again on what can be seen now,
+and the carousel goes on.
+
+It's only offered on a touch display, since it's used by pressing on it.
 
 ## Product header
 
@@ -270,8 +302,8 @@ a touch panel.
 
 ## Touch
 
-On boards with a touch panel (`esp32s3-waveshare-240-240-touch`), touches
-on the strip ui, the boot list, the settings, or the frame's title strip, are
+On boards with a touch panel (`esp32s3-waveshare-240-240-touch` and
+`esp32s3-lilygo-t5-47`), touches on the strip ui, the boot list, the settings, or the frame's title strip, are
 for it, see above.  Pressing a link on the page in the frame's body follows
 it, and stops the carousel: the user is
 driving then, so it no longer ends by itself.  Dragging the page moves it

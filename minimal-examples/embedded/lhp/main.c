@@ -66,6 +66,7 @@
 #include "boot-ui.h"
 #include "settings-ui.h"
 #include "update-ui.h"
+#include "edges-ui.h"
 
 struct lws_context *cx;
 struct lws_touch_state *tcs;
@@ -168,6 +169,13 @@ static struct lws_wifi_provision *prov;
 /* the generated page in the dlo filesystem that is being shown, if any */
 static char *page;
 static const char *page_name;
+
+/* the edges and touch page is shown, see edges-ui.h */
+static char edges_shown;
+/* where the last touch on it landed */
+static lhp_edges_touch_t edges_touch;
+/* the application's page to go back to after it, if there was one */
+static char edges_back[sizeof(lds.current_url)];
 
 extern const char *carousel_urls[];
 
@@ -316,6 +324,10 @@ static void
 app_next(lws_sorted_usec_list_t *sul);
 static void
 app_reshow(lws_sorted_usec_list_t *sul);
+static int
+app_frame(unsigned int flags);
+static void
+sui_drop(void);
 
 /*
  * The settings need a way to move around them and the keyboard: a touch
@@ -409,6 +421,116 @@ static void
 settings_stored(void *opaque)
 {
 	lws_wifi_provision_stored(prov);
+}
+
+/*
+ * The edges and touch page, for finding out the display's inset and seeing if
+ * touches land where they are on it.  It's a generated page, unframed, all of
+ * what can be seen, so the strip ui is dropped while it's shown, and made
+ * again after, the size of what can be seen then.
+ */
+
+static int
+edges_show(void)
+{
+	char *html;
+	int len;
+
+	html = malloc(LHP_EDGES_HTML_MAX);
+	if (!html)
+		return 1;
+
+	len = lhp_edges_html(html, LHP_EDGES_HTML_MAX, &lds.ic, lds.inset,
+			     &edges_touch);
+	if (len < 0) {
+		lwsl_err("%s: edges page too big\n", __func__);
+		free(html);
+		return 1;
+	}
+
+	return page_show("edges.html", html, len, NULL);
+}
+
+/* finished with the page: the inset found is kept, and used from now on */
+
+static void
+edges_leave(void)
+{
+	lwsl_notice("%s: inset %d, %d, %d, %d\n", __func__, lds.inset[0],
+		    lds.inset[1], lds.inset[2], lds.inset[3]);
+
+	edges_shown = 0;
+	if (lhp_edges_store(cx, lds.inset))
+		lwsl_warn("%s: unable to store the inset\n", __func__);
+
+	/* what's shown next is all different */
+	if (lds.disp->clear)
+		lds.disp->clear(&lds);
+
+	if (ui == UI_BOOT) {
+		/* the boot list again, laid out on what can be seen now */
+		lhp_boot_set(&boot, LHP_BOOT_SETUP, boot_have_creds());
+		boot_dirty = 1;
+		ui_kick();
+		return;
+	}
+
+	/* the page that was shown, laid out again, then the carousel goes on */
+
+	if (carousel_phase == CAROUSEL_SHOWING_LAST)
+		carousel_phase = CAROUSEL_LAST;
+
+	page_drop();
+	if (!edges_back[0] || app_frame(0)) {
+		lws_sul_schedule(cx, 0, &sul_app, app_next, 1);
+		return;
+	}
+
+	app_browse(edges_back);
+}
+
+static void
+edges_open_cb(lws_sorted_usec_list_t *sul)
+{
+	if (!edges_shown)
+		/* something else took the display meanwhile, eg, an update */
+		return;
+
+	if (lds.display_busy) {
+		lws_sul_schedule(cx, 0, &sul_settings, edges_open_cb,
+				 LWS_US_PER_SEC / 10);
+		return;
+	}
+
+	lwsl_notice("%s\n", __func__);
+
+	/* a generated page isn't there to go back to */
+	edges_back[0] = '\0';
+	if (ui == UI_APP && strncmp(lds.current_url, "file://dlofs/", 13))
+		lws_strncpy(edges_back, lds.current_url, sizeof(edges_back));
+
+	sui_drop();
+	memset(&edges_touch, 0, sizeof(edges_touch));
+
+	if (lds.disp->clear)
+		lds.disp->clear(&lds);
+	if (edges_show()) {
+		lwsl_err("%s: unable to show the edges page\n", __func__);
+		edges_leave();
+	}
+}
+
+/*
+ * "Edges and touch" was pressed in the settings.  We're told from inside the
+ * ui's callbacks, and the ui is dropped for the page: do it from the event
+ * loop instead.  It's the page's from now, so nothing else is shown meanwhile.
+ */
+
+static void
+settings_edges(void *opaque)
+{
+	edges_shown = 1;
+	lws_sul_schedule(cx, 0, &sul_settings, edges_open_cb, 1);
 }
 
 /*
@@ -788,9 +910,11 @@ app_next(lws_sorted_usec_list_t *sul)
 		return;
 	}
 
-	if (!carousel_urls[carousel] || lhp_settings_shown(&settings))
+	if (!carousel_urls[carousel] || lhp_settings_shown(&settings) ||
+	    edges_shown)
 		/* the one pass through the carousel already ended, or the
-		 * settings are shown: it goes on when they're finished with */
+		 * settings or the edges page are shown: it goes on when
+		 * they're finished with */
 		return;
 
 	lwsl_notice("%s: %s\n", __func__, carousel_urls[carousel]);
@@ -917,6 +1041,7 @@ ui_kick_cb(lws_sorted_usec_list_t *sul)
 							     UPDATE_SHOW_US);
 
 		/* the update display takes over, whatever else is going on */
+		edges_shown = 0;
 		sui_drop();
 		if (!every && update_pc_shown == update_pc)
 			/* there's no spinner to move on */
@@ -942,8 +1067,9 @@ ui_kick_cb(lws_sorted_usec_list_t *sul)
 		return;
 	}
 
-	if (ui == UI_APP)
-		/* the application paces itself */
+	if (ui == UI_APP || edges_shown)
+		/* the application paces itself, and the edges page is shown
+		 * until it's finished with */
 		return;
 
 	if (boot_done && !lhp_settings_shown(&settings)) {
@@ -1088,8 +1214,10 @@ display_completion_cb(lws_display_state_t *lds, int a)
 		}
 
 		if (ui != UI_APP || carousel_phase == CAROUSEL_DONE ||
-		    update_pc_shown >= 0 || lhp_settings_shown(&settings))
-			/* the settings' exit draws it again, and goes on */
+		    update_pc_shown >= 0 || lhp_settings_shown(&settings) ||
+		    edges_shown)
+			/* the settings' or edges page's exit draws it again,
+			 * and goes on */
 			break;
 
 		if (carousel_phase == CAROUSEL_LAST) {
@@ -1170,7 +1298,7 @@ app_page_shown(void)
 				lws_system_get_state_manager(cx)->state;
 
 	return ui == UI_APP && rs.html == 2 && !lhp_settings_shown(&settings) &&
-	       st != LWS_SYSTATE_AWAITING_MODAL_UPDATING &&
+	       !edges_shown && st != LWS_SYSTATE_AWAITING_MODAL_UPDATING &&
 	       st != LWS_SYSTATE_MODAL_UPDATING;
 }
 
@@ -1276,6 +1404,77 @@ touch_press(const void *buf, size_t len)
 	app_browse(url);
 }
 
+/*
+ * A touch press on the edges page: on one of its controls, it does what that
+ * says, otherwise it's marked where it landed, to see if that's under where
+ * it was touched
+ */
+
+static void
+edges_press(const void *buf, size_t len)
+{
+	lhp_edges_act_t act = LHP_EDGES_ACT_NONE;
+	lws_dlo_hit_t *h;
+	uint8_t inset[4];
+	int x, y;
+
+	if (lds.display_busy || rs.html != 2 || sui)
+		/* it's being drawn, or not shown yet, so what's where isn't
+		 * settled */
+		return;
+
+	if (json_coord(buf, len, "\"x\":", &x) ||
+	    json_coord(buf, len, "\"y\":", &y))
+		return;
+
+	edges_touch.sx = x;
+	edges_touch.sy = y;
+	edges_touch.inside = !lws_display_visible_xy(&lds, &x, &y);
+	edges_touch.vx = x;
+	edges_touch.vy = y;
+
+	memcpy(inset, lds.inset, sizeof(inset));
+	if (edges_touch.inside) {
+		/* the page is all of what can be seen, and isn't dragged */
+		h = lws_display_dl_hit_test(&rs.displaylist, x, y, NULL);
+		if (h && h->url)
+			act = lhp_edges_href(h->url, inset);
+	}
+
+	switch (act) {
+	case LHP_EDGES_ACT_DONE:
+		edges_leave();
+		return;
+
+	case LHP_EDGES_ACT_RESET:
+	case LHP_EDGES_ACT_CHANGED:
+		if (act == LHP_EDGES_ACT_RESET)
+			/* the board's own */
+			memcpy(inset, lds.disp->inset, sizeof(inset));
+
+		if (lws_display_set_inset(&lds, inset))
+			/* it would leave nothing to see */
+			return;
+
+		lwsl_notice("%s: inset %d, %d, %d, %d\n", __func__,
+			    inset[0], inset[1], inset[2], inset[3]);
+		/* a cross would be where it was on the old inset */
+		edges_touch.valid = 0;
+		break;
+
+	default:
+		edges_touch.valid = 1;
+		lwsl_notice("%s: touch %d, %d on the surface, %s %d, %d\n",
+			    __func__, edges_touch.sx, edges_touch.sy,
+			    edges_touch.inside ? "seen at" : "in the inset",
+			    edges_touch.vx, edges_touch.vy);
+		break;
+	}
+
+	if (edges_show())
+		lwsl_err("%s: unable to show the edges page\n", __func__);
+}
+
 /* is it an event from a button called name, eg, "bc/settings" or "ui/settings" */
 
 static int
@@ -1326,8 +1525,12 @@ smd_cb(void *opaque, lws_smd_class_t _class, lws_usec_t timestamp, void *buf,
 						"\"event\":", "scroll"))
 				page_drag(buf, len);
 			else if (!lws_json_simple_strcmp(buf, len,
-						"\"event\":", "press"))
-				touch_press(buf, len);
+						"\"event\":", "press")) {
+				if (edges_shown)
+					edges_press(buf, len);
+				else
+					touch_press(buf, len);
+			}
 		} else if (!acted &&
 			   !lws_json_simple_strcmp(buf, len, "\"event\":",
 						   "click") &&
@@ -1572,6 +1775,7 @@ app_main(void)
 	lws_state_notify_link_t notifier = { { NULL, NULL, NULL },
 					     system_notify_cb, "app" };
 	lws_state_notify_link_t *na[] = { &notifier, NULL };
+	uint8_t inset[4];
 
 	lws_set_log_level(LLL_USER | LLL_NOTICE | LLL_WARN | LLL_ERR, NULL);
 
@@ -1639,9 +1843,25 @@ app_main(void)
 	if (init_plat_devices(cx))
 		goto spin;
 
-	/* the settings, shown on the strip ui when asked for */
+	/*
+	 * The inset found on the edges page, if one was stored, instead of the
+	 * board's, before anything is laid out on what can be seen
+	 */
+	if (!lhp_edges_load(cx, inset)) {
+		lwsl_notice("%s: stored inset %d, %d, %d, %d\n", __func__,
+			    inset[0], inset[1], inset[2], inset[3]);
+		if (lws_display_set_inset(&lds, inset))
+			lwsl_warn("%s: stored inset leaves nothing\n",
+				  __func__);
+	}
+
+	/*
+	 * The settings, shown on the strip ui when asked for.  The edges page
+	 * is pressed on, so it's only offered with a touch panel
+	 */
 	if (lhp_settings_init(&settings, cx, wnd, settings_exit,
-			      settings_stored, NULL))
+			      settings_stored, tcs ? settings_edges : NULL,
+			      NULL))
 		goto spin;
 
 	/* the boot overlay, shown when the display is ready */
