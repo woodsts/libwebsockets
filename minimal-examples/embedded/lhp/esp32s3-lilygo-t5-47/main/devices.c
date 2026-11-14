@@ -133,38 +133,33 @@ static const lws_button_controller_t bc = {
 /*
  * The panel supplies
  *
- * RAIL0 enables the LT1945 boost converter, which makes the gate driver's
- * +22V VGH and -20V VGL, and what the +-15V source driver supplies are
- * regulated from.  RAIL1 then switches on VNEG (-15V), and RAIL2 VPOS
- * (+15V); VCOM comes from VPOS through a trimmer and an op-amp.  The ED047TC1
- * datasheet wants VNEG, then at least 1ms later VPOS, then VCOM 100us after,
- * and the other way around to power off, with VGL going last, once VNEG and
- * VPOS have discharged.
+ * On V2.4, PWR_EN, on the 4094's QP5, switches the 3.3V the panel side runs
+ * from.  With it, the LT1945 boost converter makes the gate driver's +22V
+ * VGH and -20V VGL, and the +-15V source driver supplies are regulated from
+ * those; VCOM comes from +15V through a trimmer and an op-amp.  So they all
+ * come and go together: we give them 20ms to come up.  The 4094 outputs
+ * the board was designed with for sequencing them, QP1 - QP3, aren't
+ * connected on V2.4.
  */
 
 static const lws_epd_direct_esp32_step_t power_on[] = {
-	{ LWS_EPDD_CTL_RAIL0, 1, 1000 },
-	{ LWS_EPDD_CTL_RAIL1, 1, 1000 },
-	{ LWS_EPDD_CTL_RAIL2, 1, 200 },
+	{ LWS_EPDD_CTL_RAIL0, 1, 20000 },
 }, power_off[] = {
-	{ LWS_EPDD_CTL_RAIL2, 0, 100 },
-	{ LWS_EPDD_CTL_RAIL1, 0, 10000 },
 	{ LWS_EPDD_CTL_RAIL0, 0, 0 },
 };
 
 /*
- * The 74HCT4094 outputs on the LilyGo boards.  QP7 is the end of the shift
+ * The 74HCT4094 outputs on the LilyGo board.  QP7 is the end of the shift
  * register the first bit shifted in reaches.
  *
  *	QP0	XLE		QP4	SPV, active low
- *	QP1	LT1945 SHDN	QP5	scan direction, keep high
- *	QP2	VPOS enable	QP6	MODE1
- *	QP3	VNEG enable	QP7	XOE
+ *	QP1	NC		QP5	PWR_EN, the panel supplies
+ *	QP2	NC		QP6	MODE1
+ *	QP3	NC		QP7	XOE
  */
 
 #define SR(_n)		{ LWS_EPDD_CTLSRC_SR, _n, 0, 0 }
 #define SR_LOW(_n)	{ LWS_EPDD_CTLSRC_SR, _n, 1, 0 }
-#define SR_HOLD(_n)	{ LWS_EPDD_CTLSRC_SR, _n, 0, 1 }
 #define GPIO(_n)	{ LWS_EPDD_CTLSRC_GPIO, _n, 0, 0 }
 #define GPIO_LOW(_n)	{ LWS_EPDD_CTLSRC_GPIO, _n, 1, 0 }
 
@@ -198,11 +193,20 @@ static const lws_epd_direct_esp32_t epd_bus = {
 	.power_off			= power_off,
 	.power_off_count		= LWS_ARRAY_SIZE(power_off),
 	/*
-	 * The ED047TC1 takes XCL up to 60MHz, 20MHz is its typical.  It's
-	 * an exact division of the S3 LCD peripheral's 160MHz clock.
+	 * The ED047TC1 takes XCL up to 60MHz, 20MHz is its typical.  10MHz
+	 * is what LilyGo's own code uses, and what's been seen to work on the
+	 * board.  It's an exact division of the S3 LCD peripheral's 160MHz
+	 * clock.
 	 */
-	.xcl_hz				= 20000000,
+	.xcl_hz				= 10000000,
 	.sr_first_out			= 7,
+	/*
+	 * LilyGo's own code writes the 4094 with gpio_set_level() calls,
+	 * a few hundred ns apart: it's not known yet how much faster the
+	 * board's 4094 can be clocked
+	 */
+	.sr_edge_ns			= 300,
+	.frame_lead_ckv			= 2,
 
 #if T547_ROUTING == T547_ROUTING_WATCH
 
@@ -233,10 +237,7 @@ static const lws_epd_direct_esp32_t epd_bus = {
 		[LWS_EPDD_CTL_STV]	= GPIO_LOW(47),
 		[LWS_EPDD_CTL_OE]	= SR(7),
 		[LWS_EPDD_CTL_MODE]	= SR(6),
-		[LWS_EPDD_CTL_RAIL0]	= SR_LOW(1),
-		[LWS_EPDD_CTL_RAIL1]	= SR(3),
-		[LWS_EPDD_CTL_RAIL2]	= SR(2),
-		[LWS_EPDD_CTL_AUX]	= SR_HOLD(5),
+		[LWS_EPDD_CTL_RAIL0]	= SR(5),
 	},
 
 #else
@@ -255,10 +256,7 @@ static const lws_epd_direct_esp32_t epd_bus = {
 		[LWS_EPDD_CTL_STV]	= SR_LOW(4),
 		[LWS_EPDD_CTL_OE]	= SR(7),
 		[LWS_EPDD_CTL_MODE]	= SR(6),
-		[LWS_EPDD_CTL_RAIL0]	= SR_LOW(1),
-		[LWS_EPDD_CTL_RAIL1]	= SR(3),
-		[LWS_EPDD_CTL_RAIL2]	= SR(2),
-		[LWS_EPDD_CTL_AUX]	= SR_HOLD(5),
+		[LWS_EPDD_CTL_RAIL0]	= SR(5),
 	},
 
 #endif

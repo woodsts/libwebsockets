@@ -17,7 +17,7 @@ selected by `T547_ROUTING` near the top of the file:
 Routing|What it is
 ---|---
 `T547_ROUTING_WATCH`|No panel: a Waveshare ESP32-S3-Touch-LCD-1.28, with the signals put on gpios it doesn't use, to check the driver and its timing on a scope
-`T547_ROUTING_LILYGO` (default)|The LilyGo board.  XLE, SPV, XOE, MODE1, the supply enables and the scan direction are on the 4094, as in LilyGo's own code for it
+`T547_ROUTING_LILYGO` (default)|The LilyGo board.  XLE, SPV, XOE, MODE1 and PWR_EN, which switches the panel supplies, are on the 4094
 
 ### Watch routing signals
 
@@ -72,11 +72,21 @@ per row and no interrupts.  It uses IDF hal and private headers to do that,
 so it is written against esp-idf v6.1 and may need adapting for other IDF
 versions.
 
-XCL runs at 20MHz, the panel's typical rate.  A row then takes about 12us to
-send, but the next row can't be latched until the previous row's 20us CKV
-drive has ended, so rows come every 21.5 - 22us, about 12ms per pass.  On
-the LilyGo board, XLE is on the 4094, so each row also costs two shift
-register writes.
+XCL runs at 10MHz, as LilyGo's own code has it, so a row takes about 24us
+to send.  The panel's typical rate is 20MHz, but that hasn't been tried on
+the board yet.  XLE is on the 4094, so each row also costs two shift
+register writes, which are given 300ns between edges, `.sr_edge_ns`.  The
+pass stats logged after each clear show what that comes to.
+
+The gate driver is started the way LilyGo's code does it: a short CKV
+clock, then SPV with a 10us CKV clock it's taken on, then two more clocks,
+`.frame_lead_ckv`, with XOE coming on before the last.  Before each row's
+data, XSTL is high for two XCL clocks, then low: the source driver only
+starts taking a row in when it sees that, so without it, nothing on the
+panel changes at all.
+
+PWR_EN switches all the panel supplies together.  They're only on while
+the panel is being updated, and for `.power_off_idle_ms` after.
 
 The panel allows at most 85 passes a second, so a pass takes at least 11.8ms
 however few rows change.  The waveforms in `main/devices.c` give pixels
@@ -92,8 +102,8 @@ changed.
 
 On the watch routing, what to look at on the scope is:
 
- - the row period (rising XSTL to rising XSTL) should be about 22us, with
-   XLE straight after the data and CKV rising as XLE falls
+ - each row's data starts after XSTL is high for two XCL clocks, with XLE
+   straight after the data and CKV rising as XLE falls
 
  - during an update, passes should follow each other without gaps, apart
    from the 1ms one every 100ms
@@ -152,12 +162,7 @@ code, and need checking on a real board:
  - the 2-bit drive codes for black, white and no drive (1, 2 and 0 in
    `lws_epd_direct_panel_ed047tc1`), and which pixel of a bus byte is first
 
- - the gate start sequence: SPV, then one CKV clock, then
-   `.frame_lead_ckv` more before the first row, which is 0 here
-
- - which 4094 output is which, see the table in `main/devices.c`
-
- - the power sequencing delays
+ - how long the panel supplies take to come up after PWR_EN, given 20ms
 
  - the waveforms in `main/devices.c`, which give pixels about the drive
    LilyGo's own code does, but in fewer, longer passes
